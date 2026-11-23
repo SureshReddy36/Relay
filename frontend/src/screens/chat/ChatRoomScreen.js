@@ -1475,12 +1475,53 @@ export default function ChatRoomScreen({ route, navigation }) {
       />
 
       {/* Help / Support Modal for Relay Bot */}
-      <Modal visible={showHelpModal} transparent animationType="fade" onRequestClose={() => setShowHelpModal(false)}>
-        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <Modal 
+        visible={showHelpModal} 
+        transparent 
+        animationType="fade" 
+        onRequestClose={() => {
+          if (helpCategory) {
+            Keyboard.dismiss();
+            setHelpCategory(null);
+            setHelpText('');
+          } else {
+            Keyboard.dismiss();
+            setShowHelpModal(false);
+          }
+        }}
+      >
+        <KeyboardAvoidingView 
+          style={styles.modalOverlay} 
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
           <View style={styles.helpModalContent}>
             <View style={styles.gifModalHeader}>
-              <Text style={styles.gifModalTitle}>Help & Support</Text>
-              <TouchableOpacity onPress={() => { setShowHelpModal(false); setHelpCategory(null); setHelpText(''); }} style={styles.gifCloseBtn}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                {helpCategory ? (
+                  <TouchableOpacity 
+                    onPress={() => { 
+                      Keyboard.dismiss(); 
+                      setHelpCategory(null); 
+                      setHelpText(''); 
+                    }} 
+                    style={{ marginRight: 8, padding: 4 }}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="arrow-back" size={20} color={Colors.primary} />
+                  </TouchableOpacity>
+                ) : null}
+                <Text style={styles.gifModalTitle}>Help & Support</Text>
+              </View>
+              <TouchableOpacity 
+                onPress={() => { 
+                  Keyboard.dismiss(); 
+                  setShowHelpModal(false); 
+                  setHelpCategory(null); 
+                  setHelpText(''); 
+                }} 
+                style={styles.gifCloseBtn}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
                 <Ionicons name="close" size={20} color={Colors.dark.text} />
               </TouchableOpacity>
             </View>
@@ -1502,11 +1543,8 @@ export default function ChatRoomScreen({ route, navigation }) {
               </>
             ) : (
               <>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-                  <TouchableOpacity onPress={() => setHelpCategory(null)} style={{ marginRight: 8 }}>
-                    <Ionicons name="arrow-back" size={20} color={Colors.primary} />
-                  </TouchableOpacity>
-                  <Text style={{ color: Colors.primary, fontWeight: 'bold' }}>{helpCategory}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                  <Text style={{ color: Colors.primary, fontWeight: 'bold', fontSize: 15 }}>{helpCategory}</Text>
                 </View>
                 <TextInput
                   style={{
@@ -1526,8 +1564,15 @@ export default function ChatRoomScreen({ route, navigation }) {
                   autoFocus
                 />
                 <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 }}>
-                  <TouchableOpacity style={[styles.forwardSendBtn, { backgroundColor: 'transparent', marginRight: 12, borderWidth: 1, borderColor: Colors.dark.border, paddingHorizontal: 20, paddingVertical: 10, marginTop: 0 }]} onPress={() => setShowHelpModal(false)}>
-                    <Text style={{ color: Colors.dark.text, fontWeight: 'bold' }}>Cancel</Text>
+                  <TouchableOpacity 
+                    style={[styles.forwardSendBtn, { backgroundColor: 'transparent', marginRight: 12, borderWidth: 1, borderColor: Colors.dark.border, paddingHorizontal: 20, paddingVertical: 10, marginTop: 0 }]} 
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setHelpCategory(null);
+                      setHelpText('');
+                    }}
+                  >
+                    <Text style={{ color: Colors.dark.text, fontWeight: 'bold' }}>Back</Text>
                   </TouchableOpacity>
                   <TouchableOpacity 
                     style={[styles.forwardSendBtn, { opacity: (!helpText.trim() || isSendingHelp) ? 0.5 : 1, paddingHorizontal: 24, paddingVertical: 10, marginTop: 0 }]} 
