@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: nexo-backend
+    name: relay-backend
     env: node
     region: singapore
     plan: free

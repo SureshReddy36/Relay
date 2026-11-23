@@ -1,7 +1,7 @@
 =========================================
       RELAY APP - MASTER COMMAND CHEAT SHEET
 =========================================
-Keep this file handy! It contains all the essential commands to build, fix, update, and manage your NexChat/Relay app.
+Keep this file handy! It contains all the essential commands to build, fix, update, and manage your Relay app.
 
 -----------------------------------------
 1. EAS & EXPO COMMANDS (FRONTEND)
@@ -31,7 +31,7 @@ Keep this file handy! It contains all the essential commands to build, fix, upda
 -----------------------------------------
 2. GIT & GITHUB (VERSION CONTROL)
 -----------------------------------------
-(Run these in the main project folder "nexchat")
+(Run these in the main project folder "Relay")
 
 * Saving and Uploading Code:
   git status            (Check which files have been modified)
@@ -94,7 +94,7 @@ Keep this file handy! It contains all the essential commands to build, fix, upda
 -----------------------------------------
 5.5. AUTOMATED ONE-CLICK UPDATE & BROADCAST
 -----------------------------------------
-(Run this from the MAIN project folder "nexchat", NOT frontend/backend)
+(Run this from the MAIN project folder "Relay", NOT frontend/backend)
 
 I built a custom script for you that will automatically:
 1. Ask you what the update is about.
