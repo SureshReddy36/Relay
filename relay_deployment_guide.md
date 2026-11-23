@@ -33,7 +33,7 @@ git push -u origin main
 2. Click **New → Web Service**.
 3. Connect your GitHub repository.
 4. Settings:
-   - **Name**: `relay-backend` (e.g. `https://relay-ih1k.onrender.com`)
+   - **Name**: `relay-backend` (your URL will be `https://<your-service-name>.onrender.com`)
    - **Root Directory**: `backend` *(if deploying from monorepo; leave empty if deploying a standalone backend repo)*
    - **Runtime**: `Node`
    - **Build Command**: `npm install`
@@ -45,7 +45,7 @@ git push -u origin main
 |---|---|
 | `NODE_ENV` | `production` |
 | `PORT` | `5000` |
-| `MONGO_URI` | `mongodb+srv://<username>:<password>@cluster0.../relay?retryWrites=true&w=majority` |
+| `MONGO_URI` | `mongodb+srv://<username>:<password>@<cluster>.mongodb.net/relay?retryWrites=true&w=majority` |
 | `JWT_SECRET` | `your_super_secret_jwt_key_here` |
 | `JWT_EXPIRES_IN` | `30d` |
 | `SECURITY_KEY_SECRET` | `your_security_key_secret_here` |
@@ -58,7 +58,7 @@ git push -u origin main
 
 6. Click **Deploy Web Service**.
 7. Test the health check:
-   Open `https://relay-ih1k.onrender.com/health` in your browser.
+   Open `https://<your-service-name>.onrender.com/health` in your browser.
    It should return:
    ```json
    {"status":"OK","app":"Relay API"}
@@ -73,8 +73,8 @@ git push -u origin main
 In `frontend/.env`:
 
 ```env
-EXPO_PUBLIC_API_URL=https://relay-ih1k.onrender.com/api
-EXPO_PUBLIC_SOCKET_URL=https://relay-ih1k.onrender.com
+EXPO_PUBLIC_API_URL=https://<your-service-name>.onrender.com/api
+EXPO_PUBLIC_SOCKET_URL=https://<your-service-name>.onrender.com
 ```
 
 Clear the local Metro cache and restart Expo:

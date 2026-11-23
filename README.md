@@ -141,9 +141,9 @@ cd frontend
 npm install
 
 # Configure environment variables in .env:
-# EXPO_PUBLIC_API_URL=http://10.0.2.2:5000/api        # For Android Emulator
-# EXPO_PUBLIC_API_URL=https://relay-ih1k.onrender.com/api # For Production Backend
-# EXPO_PUBLIC_SOCKET_URL=https://relay-ih1k.onrender.com
+# EXPO_PUBLIC_API_URL=http://10.0.2.2:5000/api             # For Android Emulator
+# EXPO_PUBLIC_API_URL=https://your-backend.onrender.com/api # For Production Backend
+# EXPO_PUBLIC_SOCKET_URL=https://your-backend.onrender.com
 
 # Start Expo development server (clearing cache)
 npx expo start -c
@@ -157,7 +157,7 @@ npx expo start -c
 ```env
 PORT=5000
 NODE_ENV=production
-MONGO_URI=mongodb+srv://<user>:<password>@cluster0.../relay?retryWrites=true&w=majority
+MONGO_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/relay?retryWrites=true&w=majority
 JWT_SECRET=your_jwt_secret_key_minimum_32_characters
 JWT_EXPIRES_IN=30d
 SECURITY_KEY_SECRET=your_aes_security_key_encryption_secret
@@ -171,8 +171,8 @@ FIREBASE_SERVICE_ACCOUNT={"type":"service_account",...}
 
 ### Frontend (`frontend/.env`)
 ```env
-EXPO_PUBLIC_API_URL=https://relay-ih1k.onrender.com/api
-EXPO_PUBLIC_SOCKET_URL=https://relay-ih1k.onrender.com
+EXPO_PUBLIC_API_URL=https://your-backend.onrender.com/api
+EXPO_PUBLIC_SOCKET_URL=https://your-backend.onrender.com
 ```
 
 ---
