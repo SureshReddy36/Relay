@@ -76,6 +76,14 @@ export const displayMessagingNotification = async ({ chatId, sender, chat, title
         },
         actions: [
           {
+            title: 'Reply',
+            pressAction: { id: 'reply' },
+            input: {
+              allowFreeFormInput: true,
+              placeholder: 'Reply...',
+            },
+          },
+          {
             title: '✓ Mark as Read',
             pressAction: { id: 'mark_as_read' },
           },

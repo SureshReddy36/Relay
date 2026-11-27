@@ -32,6 +32,7 @@ const userRoutes = require('./routes/userRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 const storyRoutes = require('./routes/storyRoutes');
+const configRoutes = require('./routes/configRoutes');
 
 const { notFound, errorHandler } = require('./middlewares/errorMiddleware');
 const socketHandler = require('./config/socketHandler');
@@ -107,6 +108,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/stories', storyRoutes);
+app.use('/api/config', configRoutes);
 
 // Health check (root + /health for Render compatibility)
 app.get('/', (req, res) => res.status(200).json({ status: 'OK', app: 'Relay API' }));

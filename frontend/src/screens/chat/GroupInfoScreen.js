@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Pressable,
   Image, Alert, Switch, StatusBar, Platform, Modal,
   TextInput, ActivityIndicator, FlatList, KeyboardAvoidingView,
 } from 'react-native';
@@ -80,7 +80,10 @@ export default function GroupInfoScreen({ route, navigation }) {
   const [addSearchQuery, setAddSearchQuery] = useState('');
   const [addSearchResults, setAddSearchResults] = useState([]);
   const [isSearchingAdd, setIsSearchingAdd] = useState(false);
-  const [isAddingUser, setIsAddingUser] = useState(null);
+  const [addingUserIds, setAddingUserIds] = useState({});
+  const [invitedUserIds, setInvitedUserIds] = useState({});
+  const [addInviteFeedback, setAddInviteFeedback] = useState(null);
+  const addFeedbackTimerRef = useRef(null);
   const [showBulkRemoveModal, setShowBulkRemoveModal] = useState(false);
   const [selectedForRemoval, setSelectedForRemoval] = useState([]);
   const [isBulkRemoving, setIsBulkRemoving] = useState(false);
@@ -146,35 +149,78 @@ export default function GroupInfoScreen({ route, navigation }) {
     );
   };
 
+  useEffect(() => {
+    const invitedMap = {};
+    (chat.invitedUsers || []).forEach(u => {
+      const id = (u._id || u)?.toString();
+      if (id) invitedMap[id] = true;
+    });
+    setInvitedUserIds(prev => ({ ...invitedMap, ...prev }));
+  }, [chat.invitedUsers]);
+
+  useEffect(() => {
+    return () => {
+      if (addFeedbackTimerRef.current) clearTimeout(addFeedbackTimerRef.current);
+    };
+  }, []);
+
+  const showInlineInviteFeedback = useCallback((type, text) => {
+    if (addFeedbackTimerRef.current) clearTimeout(addFeedbackTimerRef.current);
+    setAddInviteFeedback({ type, text });
+    addFeedbackTimerRef.current = setTimeout(() => {
+      setAddInviteFeedback(null);
+    }, 3000);
+  }, []);
+
+  const closeAddMemberModal = useCallback(() => {
+    if (addFeedbackTimerRef.current) clearTimeout(addFeedbackTimerRef.current);
+    setShowAddMemberModal(false);
+    setAddSearchQuery('');
+    setAddSearchResults([]);
+    setAddInviteFeedback(null);
+    setAddingUserIds({});
+  }, []);
+
   const handleAddSearch = async () => {
     if (addSearchQuery.trim().length < 3) {
-      showAlert('Search', 'Type at least 3 characters to search users.');
+      showInlineInviteFeedback('error', 'Type at least 3 characters to search users.');
       return;
     }
     setIsSearchingAdd(true);
+    setAddInviteFeedback(null);
     try {
-      const { data } = await api.get(`/users/search?q=${addSearchQuery.trim()}`);
-      // Filter out users already in the group
-      const existingIds = (chat.users || []).map(u => (u._id || u).toString());
-      const filtered = (data.users || []).filter(u => !existingIds.includes(u._id.toString()) && u.username !== 'relay_bot' && u.username !== 'relay');
+      const { data } = await api.get(`/users/search?q=${encodeURIComponent(addSearchQuery.trim())}`);
+      // Filter out users already in the group and deduplicate results
+      const existingIds = new Set((chat.users || []).map(u => (u._id || u).toString()));
+      const seenIds = new Set();
+      const filtered = (data.users || []).filter(u => {
+        const uid = u._id?.toString();
+        if (!uid || seenIds.has(uid) || existingIds.has(uid)) return false;
+        if (u.username === 'relay_bot' || u.username === 'relay') return false;
+        seenIds.add(uid);
+        return true;
+      });
       setAddSearchResults(filtered);
     } catch (e) {
-      showAlert('Error', e.message || 'Search failed');
+      showInlineInviteFeedback('error', e.message || 'Search failed');
     } finally {
       setIsSearchingAdd(false);
     }
   };
 
-  const handleAddUserToGroup = async (userId) => {
-    setIsAddingUser(userId);
+  const handleAddUserToGroup = useCallback(async (userId) => {
+    const uid = userId?.toString();
+    if (!uid || addingUserIds[uid] || invitedUserIds[uid]) return;
+
+    setAddingUserIds(prev => ({ ...prev, [uid]: true }));
     try {
       // Add user to invited list on backend
-      await api.put(`/chats/group/${chat._id}/invite`, { userId });
-      
+      const { data: inviteData } = await api.put(`/chats/group/${chat._id}/invite`, { userId: uid });
+
       // Get/create DM chat to send the invite message
-      const { data: chatData } = await api.post('/chats', { userId });
+      const { data: chatData } = await api.post('/chats', { userId: uid });
       const dmChatId = chatData.chat._id;
-      
+
       // Send the invite message
       await api.post('/messages', {
         chatId: dmChatId,
@@ -182,16 +228,81 @@ export default function GroupInfoScreen({ route, navigation }) {
         messageType: 'group_invite',
       });
 
-      showAlert('Invite Sent', 'An invitation has been sent to the user in their direct messages.');
-      setShowAddMemberModal(false);
-      setAddSearchQuery('');
-      setAddSearchResults([]);
+      setInvitedUserIds(prev => ({ ...prev, [uid]: true }));
+      const nextInvitedUsers = inviteData?.invitedUsers || [...(chat.invitedUsers || []), uid];
+      setChat(prev => ({ ...prev, invitedUsers: nextInvitedUsers }));
+      useChatStore.getState().updateChat(chat._id, { invitedUsers: nextInvitedUsers });
+      showInlineInviteFeedback('success', 'Invitation sent via direct message.');
     } catch (e) {
-      showAlert('Error', e.response?.data?.message || e.message || 'Failed to send invite');
+      const msg = e.response?.data?.message || e.message || 'Failed to send invite';
+      if (msg.toLowerCase().includes('already been invited')) {
+        setInvitedUserIds(prev => ({ ...prev, [uid]: true }));
+      }
+      showInlineInviteFeedback('error', msg);
     } finally {
-      setIsAddingUser(null);
+      setAddingUserIds(prev => {
+        const next = { ...prev };
+        delete next[uid];
+        return next;
+      });
     }
-  };
+  }, [addingUserIds, invitedUserIds, chat._id, chat.chatName, chat.invitedUsers, showInlineInviteFeedback]);
+
+  const renderAddEmptyComponent = useCallback(() => (
+    <View style={{ alignItems: 'center', paddingVertical: 20 }}>
+      <Text style={{ color: Colors.dark.muted, fontSize: 13 }}>
+        {addSearchQuery.trim().length >= 3 ? 'No results found' : 'Enter 3+ characters to search'}
+      </Text>
+    </View>
+  ), [addSearchQuery]);
+
+  const renderAddResultItem = useCallback(({ item }) => {
+    const uid = item._id?.toString();
+    const isAdding = !!addingUserIds[uid];
+    const isInvited = !!invitedUserIds[uid];
+
+    return (
+      <View style={styles.addResultItem}>
+        {item.profilePicture ? (
+          <Image source={{ uri: item.profilePicture }} style={styles.addAvatar} />
+        ) : (
+          <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.addAvatar}>
+            <Text style={styles.addAvatarInitial}>
+              {(item.displayName || item.username).charAt(0).toUpperCase()}
+            </Text>
+          </LinearGradient>
+        )}
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: Colors.dark.text, fontSize: 14, fontWeight: '600' }}>
+            {item.displayName || item.username}
+          </Text>
+          <Text style={{ color: Colors.dark.muted, fontSize: 12 }}>
+            @{item.username}
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => handleAddUserToGroup(uid)}
+          style={[styles.addButton, isInvited && styles.addButtonInvited]}
+          disabled={isAdding || isInvited}
+          activeOpacity={0.75}
+        >
+          {isAdding ? (
+            <ActivityIndicator color="#FFF" size="small" />
+          ) : isInvited ? (
+            <>
+              <Ionicons name="checkmark" size={14} color={Colors.primary} />
+              <Text style={{ color: Colors.primary, fontSize: 12, fontWeight: '700' }}>Invited</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="add" size={14} color="#FFF" />
+              <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>Add</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+    );
+  }, [addingUserIds, invitedUserIds, handleAddUserToGroup]);
 
   // Long-press member action (admin only)
   const handleMemberAction = (member) => {
@@ -1004,10 +1115,10 @@ export default function GroupInfoScreen({ route, navigation }) {
       </Modal>
 
       {/* ── Add Member Modal ─────────────────────────────────────────── */}
-      <Modal visible={showAddMemberModal} transparent animationType="slide" onRequestClose={() => setShowAddMemberModal(false)}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
-          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddMemberModal(false)}>
-            <View style={styles.memberSheet} onStartShouldSetResponder={() => true}>
+      <Modal visible={showAddMemberModal} transparent animationType="slide" onRequestClose={closeAddMemberModal}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeAddMemberModal} />
+          <View style={styles.memberSheet}>
             <View style={styles.editHandle} />
             <Text style={[styles.memberSheetName, { color: Colors.primary, fontSize: 18, marginBottom: 16 }]}>Add People to Group</Text>
 
@@ -1021,10 +1132,11 @@ export default function GroupInfoScreen({ route, navigation }) {
                 value={addSearchQuery}
                 onChangeText={setAddSearchQuery}
                 autoCapitalize="none"
+                returnKeyType="search"
                 onSubmitEditing={handleAddSearch}
               />
               {addSearchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => { setAddSearchQuery(''); setAddSearchResults([]); }}>
+                <TouchableOpacity onPress={() => { setAddSearchQuery(''); setAddSearchResults([]); setAddInviteFeedback(null); }}>
                   <Ionicons name="close-circle" size={18} color={Colors.dark.muted} />
                 </TouchableOpacity>
               )}
@@ -1042,61 +1154,37 @@ export default function GroupInfoScreen({ route, navigation }) {
               )}
             </TouchableOpacity>
 
+            {/* Inline status banner (avoids colliding Modal alerts) */}
+            {addInviteFeedback && (
+              <View style={[styles.addFeedbackBanner, addInviteFeedback.type === 'error' ? styles.addFeedbackError : styles.addFeedbackSuccess]}>
+                <Ionicons
+                  name={addInviteFeedback.type === 'error' ? 'alert-circle' : 'checkmark-circle'}
+                  size={16}
+                  color={addInviteFeedback.type === 'error' ? '#EF4444' : Colors.primary}
+                />
+                <Text style={[styles.addFeedbackText, { color: addInviteFeedback.type === 'error' ? '#EF4444' : Colors.primary }]}>
+                  {addInviteFeedback.text}
+                </Text>
+              </View>
+            )}
+
             {/* Results */}
             <FlatList
               data={addSearchResults}
-              keyExtractor={(item) => item._id}
+              keyExtractor={(item) => item._id.toString()}
+              extraData={{ addingUserIds, invitedUserIds }}
+              keyboardShouldPersistTaps="handled"
+              removeClippedSubviews={false}
               style={{ maxHeight: 220, marginVertical: 8 }}
-              ListEmptyComponent={() => (
-                <View style={{ alignItems: 'center', paddingVertical: 20 }}>
-                  <Text style={{ color: Colors.dark.muted, fontSize: 13 }}>
-                    {addSearchQuery.trim().length >= 3 ? 'No results found' : 'Enter 3+ characters to search'}
-                  </Text>
-                </View>
-              )}
-              renderItem={({ item }) => (
-                <View style={styles.addResultItem}>
-                  {item.profilePicture ? (
-                    <Image source={{ uri: item.profilePicture }} style={styles.addAvatar} />
-                  ) : (
-                    <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.addAvatar}>
-                      <Text style={styles.addAvatarInitial}>
-                        {(item.displayName || item.username).charAt(0).toUpperCase()}
-                      </Text>
-                    </LinearGradient>
-                  )}
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: Colors.dark.text, fontSize: 14, fontWeight: '600' }}>
-                      {item.displayName || item.username}
-                    </Text>
-                    <Text style={{ color: Colors.dark.muted, fontSize: 12 }}>
-                      @{item.username}
-                    </Text>
-                  </View>
-                  <TouchableOpacity 
-                    onPress={() => handleAddUserToGroup(item._id)}
-                    style={styles.addButton}
-                    disabled={isAddingUser === item._id}
-                  >
-                    {isAddingUser === item._id ? (
-                      <ActivityIndicator color="#FFF" size="small" />
-                    ) : (
-                      <>
-                        <Ionicons name="add" size={14} color="#FFF" />
-                        <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>Add</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              )}
+              ListEmptyComponent={renderAddEmptyComponent}
+              renderItem={renderAddResultItem}
             />
 
-            {/* Cancel */}
-            <TouchableOpacity style={styles.memberSheetCancel} onPress={() => { setShowAddMemberModal(false); setAddSearchQuery(''); setAddSearchResults([]); }}>
-              <Text style={styles.memberSheetCancelText}>Cancel</Text>
+            {/* Done / Cancel */}
+            <TouchableOpacity style={styles.memberSheetCancel} onPress={closeAddMemberModal}>
+              <Text style={styles.memberSheetCancelText}>Done</Text>
             </TouchableOpacity>
           </View>
-        </TouchableOpacity>
         </KeyboardAvoidingView>
       </Modal>
 
@@ -1412,9 +1500,28 @@ const styles = StyleSheet.create({
     fontSize: 14, fontWeight: '700', color: '#FFF',
   },
   addButton: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
     backgroundColor: Colors.primary, borderRadius: 10,
-    paddingHorizontal: 12, paddingVertical: 8,
+    paddingHorizontal: 12, minWidth: 82, height: 34,
+  },
+  addButtonInvited: {
+    backgroundColor: Colors.primary + '18',
+    borderWidth: 1,
+    borderColor: Colors.primary + '50',
+  },
+  addFeedbackBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10,
+    marginBottom: 6,
+  },
+  addFeedbackSuccess: {
+    backgroundColor: Colors.primary + '15',
+  },
+  addFeedbackError: {
+    backgroundColor: 'rgba(239, 68, 68, 0.14)',
+  },
+  addFeedbackText: {
+    fontSize: 13, fontWeight: '600', flex: 1,
   },
   fullAvatarOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.9)',

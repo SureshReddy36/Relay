@@ -96,6 +96,7 @@ const useChatStore = create((set, get) => ({
     // Preserve readBy and deliveredTo from optimistic message (fixes race condition)
     const existingTemp = current.find(m => m._id === tempId);
     if (existingTemp) {
+      realMessage = { ...realMessage, _clientKey: existingTemp._clientKey || tempId };
       if (existingTemp.readBy && existingTemp.readBy.length > 0) {
         realMessage.readBy = [...new Set([...(realMessage.readBy || []), ...existingTemp.readBy])];
       }
@@ -105,7 +106,7 @@ const useChatStore = create((set, get) => ({
     }
 
     if (current.some(m => m._id === realMessage._id)) {
-      updated = current.filter(m => m._id !== tempId).map(m => m._id === realMessage._id ? { ...m, readBy: realMessage.readBy, deliveredTo: realMessage.deliveredTo } : m);
+      updated = current.filter(m => m._id !== tempId).map(m => m._id === realMessage._id ? { ...m, _clientKey: realMessage._clientKey || m._clientKey, readBy: realMessage.readBy, deliveredTo: realMessage.deliveredTo } : m);
     } else {
       updated = current.map(m => m._id === tempId ? realMessage : m);
     }

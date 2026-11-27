@@ -3,7 +3,7 @@ import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import api from './api';
-import messaging from '@react-native-firebase/messaging';
+import { getMessaging, getToken } from '@react-native-firebase/messaging';
 import notifee from '@notifee/react-native';
 export async function registerForPushNotificationsAsync() {
   let token;
@@ -53,9 +53,7 @@ export async function registerForPushNotificationsAsync() {
 
     // 2. Try to get FCM Token
     try {
-      if (messaging) {
-        fcmToken = await messaging().getToken();
-      }
+      fcmToken = await getToken(getMessaging());
     } catch (fcmErr) {
       console.log('Failed to get FCM token:', fcmErr.message);
     }

@@ -557,21 +557,32 @@ const addToGroup = asyncHandler(async (req, res) => {
 // @access Private
 const inviteToGroup = asyncHandler(async (req, res) => {
   const { userId } = req.body;
+  if (!userId) { res.status(400); throw new Error('User ID is required'); }
+
   const chat = await Chat.findById(req.params.id);
   if (!chat) { res.status(404); throw new Error('Group not found'); }
 
   const isAdmin = chat.admins.some(a => a.toString() === req.user._id.toString()) || chat.groupAdmin.toString() === req.user._id.toString();
   if (!isAdmin) { res.status(403); throw new Error('Only admins can invite members'); }
 
-  if (chat.users.includes(userId)) { res.status(400); throw new Error('User already in group'); }
-  if (chat.bannedUsers.includes(userId)) { res.status(400); throw new Error('User is banned'); }
-
-  if (!chat.invitedUsers.includes(userId)) {
-    chat.invitedUsers.push(userId);
-    await chat.save();
+  const targetIdStr = userId.toString();
+  if (chat.users.some(u => u.toString() === targetIdStr)) {
+    res.status(400);
+    throw new Error('User already in group');
+  }
+  if (chat.bannedUsers.some(u => u.toString() === targetIdStr)) {
+    res.status(400);
+    throw new Error('User is banned');
+  }
+  if (chat.invitedUsers.some(u => u.toString() === targetIdStr)) {
+    res.status(400);
+    throw new Error('User has already been invited');
   }
 
-  res.status(200).json({ success: true, message: 'User invited' });
+  chat.invitedUsers.push(userId);
+  await chat.save();
+
+  res.status(200).json({ success: true, message: 'User invited', invitedUsers: chat.invitedUsers });
 });
 
 // @desc  Remove user(s) from group

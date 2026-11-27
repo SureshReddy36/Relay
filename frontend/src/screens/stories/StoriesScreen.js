@@ -4,8 +4,9 @@ import * as ScreenCapture from 'expo-screen-capture';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, Image, ScrollView,
   ActivityIndicator, Alert, Platform, StatusBar, Dimensions,
-  Modal, TextInput, KeyboardAvoidingView, SafeAreaView, DeviceEventEmitter
+  Modal, TextInput, KeyboardAvoidingView, DeviceEventEmitter
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';

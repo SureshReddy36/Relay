@@ -1,12 +1,11 @@
 import { registerRootComponent } from 'expo';
 import React from 'react';
-import messaging from '@react-native-firebase/messaging';
+import { getMessaging, setBackgroundMessageHandler } from '@react-native-firebase/messaging';
 import notifee, { AndroidStyle, AndroidImportance, EventType } from '@notifee/react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-
-const getBaseUrl = () => process.env.EXPO_PUBLIC_API_URL || 'https://relay-test-k4mh.onrender.com/api';
+import { getStoredOrFallbackApiUrl } from './src/services/configService';
 
 // ═══════════════════════════════════════════════════════════════
 // INLINE notification display — no external module imports
@@ -88,6 +87,14 @@ async function showNotification(chatId, sender, chat, title, rawBody, imageUrl) 
         },
         actions: [
           {
+            title: 'Reply',
+            pressAction: { id: 'reply' },
+            input: {
+              allowFreeFormInput: true,
+              placeholder: 'Reply...',
+            },
+          },
+          {
             title: '✓ Mark as Read',
             pressAction: { id: 'mark_as_read' },
           },
@@ -99,6 +106,11 @@ async function showNotification(chatId, sender, chat, title, rawBody, imageUrl) 
     if (imageUrl) {
       notificationConfig.android.largeIcon = imageUrl;
     }
+
+    // Cancel any fallback FCM system notification for this chatId before showing rich MessagingStyle
+    try {
+      await notifee.cancelNotification('0', chatId);
+    } catch (_) {}
 
     await notifee.displayNotification(notificationConfig);
   } catch (e) {
@@ -139,9 +151,10 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
       if (!token) return;
 
       if (pressAction.id === 'reply' && input) {
+        const baseUrl = await getStoredOrFallbackApiUrl();
         const textContent = typeof input === 'string' ? input : (input.text || input.input || JSON.stringify(input));
         // Use axios instead of fetch for bulletproof headless requests
-        await axios.post(`${getBaseUrl()}/messages`, {
+        await axios.post(`${baseUrl}/messages`, {
           chatId: chatId,
           content: textContent,
           messageType: 'text'
@@ -158,7 +171,8 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
           null, notification.title || 'Chat', textContent, null);
 
       } else if (pressAction.id === 'mark_as_read') {
-        await axios.put(`${getBaseUrl()}/messages/${chatId}/read`, {}, {
+        const baseUrl = await getStoredOrFallbackApiUrl();
+        await axios.put(`${baseUrl}/messages/${chatId}/read`, {}, {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -183,7 +197,7 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
 // Firebase Background Data Message Handler
 // This is what runs when a message arrives and app is CLOSED
 // ═══════════════════════════════════════════════════════════════
-messaging().setBackgroundMessageHandler(async remoteMessage => {
+setBackgroundMessageHandler(getMessaging(), async remoteMessage => {
   const data = remoteMessage.data;
   if (!data) return;
 

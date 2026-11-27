@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, Image, StyleSheet,
   Pressable, Modal, Alert, Clipboard, ScrollView,
@@ -7,13 +7,21 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import Swipeable from 'react-native-gesture-handler/Swipeable';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  interpolate,
+  Extrapolation,
+} from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import { Colors } from '../theme/colors';
 import { CHAT_THEMES, GROUP_THEMES } from './ThemeSelectSheet';
 import { useAlert } from './CustomAlert';
 import EmojiPicker from 'rn-emoji-keyboard';
 
-import { Audio } from 'expo-av';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import { useNavigation } from '@react-navigation/native';
 
 const PreviewVideo = ({ url }) => {
@@ -26,51 +34,26 @@ const PreviewVideo = ({ url }) => {
 
 
 const AudioPlayer = ({ url, isMine }) => {
-  const [sound, setSound] = useState(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0);
-
-  useEffect(() => {
-    return sound ? () => { sound.unloadAsync(); } : undefined;
-  }, [sound]);
+  const player = useAudioPlayer(url);
+  const status = useAudioPlayerStatus(player);
+  const isPlaying = !!status.playing;
+  const loading = !!status.isBuffering && !status.isLoaded;
+  const progress = status.duration > 0 ? Math.min(1, status.currentTime / status.duration) : 0;
 
   const togglePlayback = async () => {
     if (loading) return;
     try {
-      if (sound) {
-        const status = await sound.getStatusAsync();
-        if (status.isPlaying) {
-          await sound.pauseAsync();
-        } else {
-          // If finished, replay from start. Otherwise, resume.
-          if (status.positionMillis >= status.durationMillis || status.didJustFinish) {
-            await sound.replayAsync();
-          } else {
-            await sound.playAsync();
-          }
-        }
+      if (status.playing) {
+        player.pause();
       } else {
-        setLoading(true);
-        await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-        const { sound: newSound } = await Audio.Sound.createAsync(
-          { uri: url },
-          { shouldPlay: true },
-          (status) => {
-            if (status.isLoaded) {
-              setIsPlaying(status.isPlaying);
-              if (status.durationMillis) {
-                setProgress(status.positionMillis / status.durationMillis);
-              }
-            }
-          }
-        );
-        setSound(newSound);
-        setLoading(false);
+        await setAudioModeAsync({ playsInSilentMode: true });
+        if (status.didJustFinish || (status.duration > 0 && status.currentTime >= status.duration)) {
+          await player.seekTo(0);
+        }
+        player.play();
       }
     } catch (e) {
       console.error('Audio playback error', e);
-      setLoading(false);
     }
   };
 
@@ -98,7 +81,79 @@ const formatTime = (d) =>
 const formatDate = (d) =>
   new Date(d).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-export default function MessageBubble({
+const SwipeableMessageRow = React.memo(({ canEdit, onSwipeReply, onSwipeEdit, children }) => {
+  const translateX = useSharedValue(0);
+  const triggered = useSharedValue(false);
+
+  const panGesture = useMemo(() => (
+    Gesture.Pan()
+      .activeOffsetX([-20, 20])
+      .failOffsetY([-8, 8])
+      .onUpdate((e) => {
+        const minX = canEdit ? -64 : 0;
+        const maxX = 64;
+        translateX.value = Math.max(minX, Math.min(maxX, e.translationX));
+      })
+      .onEnd(() => {
+        if (!triggered.value) {
+          if (translateX.value >= 44) {
+            triggered.value = true;
+            if (onSwipeReply) scheduleOnRN(onSwipeReply);
+          } else if (canEdit && translateX.value <= -44) {
+            triggered.value = true;
+            if (onSwipeEdit) scheduleOnRN(onSwipeEdit);
+          }
+        }
+        translateX.value = withSpring(0, { damping: 22, stiffness: 260 }, () => {
+          triggered.value = false;
+        });
+      })
+  ), [canEdit, onSwipeReply, onSwipeEdit]);
+
+  const rowStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  const leftIconStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateX.value, [8, 40], [0, 1], Extrapolation.CLAMP),
+    transform: [{ scale: interpolate(translateX.value, [8, 44], [0.6, 1], Extrapolation.CLAMP) }],
+  }));
+
+  const rightIconStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateX.value, [-40, -8], [1, 0], Extrapolation.CLAMP),
+    transform: [{ scale: interpolate(translateX.value, [-44, -8], [1, 0.6], Extrapolation.CLAMP) }],
+  }));
+
+  return (
+    <View style={{ position: 'relative', justifyContent: 'center' }}>
+      <Animated.View
+        pointerEvents="none"
+        style={[{ position: 'absolute', left: 12, justifyContent: 'center', alignItems: 'center' }, leftIconStyle]}
+      >
+        <View style={{ backgroundColor: Colors.primary + '22', borderRadius: 12, padding: 10 }}>
+          <Ionicons name="arrow-undo-outline" size={22} color={Colors.primary} />
+        </View>
+      </Animated.View>
+      {canEdit && (
+        <Animated.View
+          pointerEvents="none"
+          style={[{ position: 'absolute', right: 12, justifyContent: 'center', alignItems: 'center' }, rightIconStyle]}
+        >
+          <View style={{ backgroundColor: Colors.primary + '22', borderRadius: 12, padding: 10 }}>
+            <Ionicons name="pencil-outline" size={22} color={Colors.primary} />
+          </View>
+        </Animated.View>
+      )}
+      <GestureDetector gesture={panGesture}>
+        <Animated.View style={rowStyle}>
+          {children}
+        </Animated.View>
+      </GestureDetector>
+    </View>
+  );
+});
+
+const MessageBubble = React.memo(function MessageBubble({
   message, currentUser, isGroup, chatUsers, chatTheme, searchQuery, chat,
   onSenderPress, onReply, onReplyPress, highlightedMessageId,
   onMediaPress, onDelete, onReact, onEdit, onForward,
@@ -107,7 +162,6 @@ export default function MessageBubble({
   const [showActions, setShowActions] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [tab, setTab] = useState('actions'); // 'actions' | 'readby'
-  const swipeableRef = useRef(null);
   const navigation = useNavigation();
   const { showAlert } = useAlert() || {};
 
@@ -695,55 +749,26 @@ export default function MessageBubble({
     });
   };
 
-  // LEFT actions = revealed by LEFT-TO-RIGHT drag → Reply
-  const renderLeftActions = () => {
-    return (
-      <View style={{ width: 56, justifyContent: 'center', alignItems: 'center', paddingLeft: 8 }}>
-        <View style={{ backgroundColor: Colors.primary + '22', borderRadius: 12, padding: 10 }}>
-          <Ionicons name="arrow-undo-outline" size={22} color={Colors.primary} />
-        </View>
-      </View>
-    );
-  };
+  const handleSwipeReply = useCallback(() => {
+    onReply?.(message);
+  }, [onReply, message]);
 
-  // RIGHT actions = revealed by RIGHT-TO-LEFT drag → Edit (own text messages only)
-  const renderRightActions = () => {
-    if (!canEdit) return null;
-    return (
-      <View style={{ width: 56, justifyContent: 'center', alignItems: 'center', paddingRight: 8 }}>
-        <View style={{ backgroundColor: Colors.primary + '22', borderRadius: 12, padding: 10 }}>
-          <Ionicons name="pencil-outline" size={22} color={Colors.primary} />
-        </View>
-      </View>
-    );
-  };
+  const handleSwipeEdit = useCallback(() => {
+    if (canEdit) onEdit?.(message);
+  }, [canEdit, onEdit, message]);
 
   return (
     <>
-      <Swipeable
-        ref={swipeableRef}
-        friction={2}
-        overshootLeft={false}
-        overshootRight={false}
-        renderLeftActions={renderLeftActions}
-        renderRightActions={renderRightActions}
-        onSwipeableWillOpen={(direction) => {
-          swipeableRef.current?.close();
-          if (direction === 'left') {
-            // LEFT-TO-RIGHT drag → Reply
-            onReply?.(message);
-          } else if (direction === 'right') {
-            // RIGHT-TO-LEFT drag → Edit
-            if (canEdit) onEdit?.(message);
-          }
-        }}
-        onSwipeableOpen={() => swipeableRef.current?.close()}
+      <SwipeableMessageRow
+        canEdit={canEdit}
+        onSwipeReply={handleSwipeReply}
+        onSwipeEdit={handleSwipeEdit}
       >
       <Pressable
         onLongPress={openModal}
         onPress={() => {
           if (selectionMode) {
-            onSelectToggle?.();
+            onSelectToggle?.(message._id);
           }
         }}
         style={[
@@ -978,7 +1003,7 @@ export default function MessageBubble({
           </>
         )}
       </Pressable>
-    </Swipeable>
+      </SwipeableMessageRow>
 
       {/* Reactions — below the bubble */}
       {message.reactions?.length > 0 && (
@@ -1157,7 +1182,9 @@ export default function MessageBubble({
       />
     </>
   );
-}
+});
+
+export default MessageBubble;
 
 const styles = StyleSheet.create({
   row: { paddingHorizontal: 12, marginVertical: 2, flexDirection: 'row' },

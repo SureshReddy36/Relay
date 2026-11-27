@@ -276,10 +276,19 @@ const sendMessage = asyncHandler(async (req, res) => {
               //   Notifee's displayNotification use the same slot (no duplicate in panel)
               await admin.messaging().send({
                 token: msg.token,
+                notification: {
+                  title: msg.data.title || 'New Message',
+                  body: (msg.data.body || '').replace(/[*_~`]/g, ''),
+                },
                 data: msg.data,
                 android: {
                   priority: 'high',
-                  ttl: 86400 * 1000
+                  ttl: 86400 * 1000,
+                  notification: {
+                    channelId: 'relay-messages-v5',
+                    tag: msg.data.chatId,
+                    sound: 'relay_notification_sound',
+                  },
                 },
                 apns: {
                   headers: { 'apns-priority': '10' },
@@ -851,10 +860,19 @@ const broadcastAdminUpdate = asyncHandler(async (req, res) => {
             try {
               await admin.messaging().send({
                 token: msg.token,
+                notification: {
+                  title: msg.data.title || 'New Message',
+                  body: (msg.data.body || '').replace(/[*_~`]/g, ''),
+                },
                 data: msg.data,
                 android: {
                   priority: 'high',
-                  ttl: 86400 * 1000
+                  ttl: 86400 * 1000,
+                  notification: {
+                    channelId: 'relay-messages-v5',
+                    tag: msg.data.chatId,
+                    sound: 'relay_notification_sound',
+                  },
                 },
                 apns: {
                   headers: { 'apns-priority': '10' },

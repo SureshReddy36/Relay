@@ -5,11 +5,12 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as Notifications from 'expo-notifications';
 import * as Updates from 'expo-updates';
 import notifee, { EventType } from '@notifee/react-native';
-import messaging from '@react-native-firebase/messaging';
+import { getMessaging, onMessage } from '@react-native-firebase/messaging';
 // RootNavigator dynamically imported later to allow Colors override
 // import RootNavigator from './src/navigation/RootNavigator';
 import useAuthStore from './src/store/useAuthStore';
 import { connectSocket } from './src/services/socketService';
+import { initializeBackendConfig, refreshBackendConfig } from './src/services/configService';
 
 LogBox.ignoreLogs(['Warning: ...', 'Animated: `useNativeDriver`']);
 
@@ -52,7 +53,7 @@ export default function App() {
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
 
   useEffect(() => {
-    const initTheme = async () => {
+    const initApp = async () => {
       try {
         const savedTheme = await AsyncStorage.getItem('app_theme');
         if (savedTheme === 'cyan') {
@@ -61,10 +62,18 @@ export default function App() {
           Object.assign(Colors, AppThemes.relay);
         }
       } catch (e) {}
+      await initializeBackendConfig();
       setThemeLoaded(true);
       hydrate();
     };
-    initTheme();
+    initApp();
+
+    const configSub = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        refreshBackendConfig(false);
+      }
+    });
+    return () => configSub.remove();
   }, []);
 
   useEffect(() => {
@@ -145,8 +154,33 @@ export default function App() {
     // 1. App in Background: Handle Notification Press
     if (notifee) {
       try {
-        unsubscribe = notifee.onForegroundEvent(({ type, detail }) => {
+        unsubscribe = notifee.onForegroundEvent(async ({ type, detail }) => {
           const chatId = detail.notification?.data?.chatId;
+          if (type === EventType?.ACTION_PRESS && chatId) {
+            const actionId = detail.pressAction?.id;
+            try {
+              const api = require('./src/services/api').default;
+              if (actionId === 'reply' && detail.input) {
+                const textContent = typeof detail.input === 'string'
+                  ? detail.input
+                  : (detail.input.text || detail.input.input || '');
+                if (textContent.trim()) {
+                  await api.post('/messages', {
+                    chatId,
+                    content: textContent,
+                    messageType: 'text',
+                  });
+                }
+                await notifee.cancelNotification(detail.notification?.id || chatId);
+              } else if (actionId === 'mark_as_read') {
+                await api.put(`/messages/${chatId}/read`, {});
+                await notifee.cancelNotification(detail.notification?.id || chatId);
+              }
+            } catch (e) {
+              console.log('Notifee foreground action failed:', e.message);
+            }
+            return;
+          }
           if (type === EventType?.PRESS && chatId) {
             // Clear stored messages — user is reading the chat now
             try {
@@ -216,9 +250,8 @@ export default function App() {
 
     // 3. App in Foreground: Handle Incoming Data Messages
     let unsubscribeFCM;
-    if (messaging) {
-      try {
-        unsubscribeFCM = messaging().onMessage(async remoteMessage => {
+    try {
+      unsubscribeFCM = onMessage(getMessaging(), async remoteMessage => {
           const data = remoteMessage.data;
           if (!data) return;
 
@@ -240,11 +273,10 @@ export default function App() {
           } catch (e) {
             console.error('Error handling foreground data message:', e);
           }
-        });
-      } catch (e) {
-        console.log('Firebase messaging() failed to initialize natively:', e);
-      }
-    } // Close if (messaging)
+      });
+    } catch (e) {
+      console.log('Firebase messaging() failed to initialize natively:', e);
+    }
 
     return () => {
       if (unsubscribe) unsubscribe();

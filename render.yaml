@@ -28,3 +28,7 @@ services:
         sync: false
       - key: CLIENT_URL
         value: "*"
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: PUBLIC_SOCKET_URL
+        sync: false

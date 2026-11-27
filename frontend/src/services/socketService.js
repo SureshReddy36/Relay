@@ -5,29 +5,44 @@ import * as Notifications from 'expo-notifications';
 import useChatStore from '../store/useChatStore';
 import useAuthStore from '../store/useAuthStore';
 import api from './api';
-
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || 'http://10.0.2.2:5000';
+import { getSocketUrl, onConfigChange } from './configService';
 
 let socket = null;
+let activeSocketUrl = null;
+let activeUserId = null;
 
 const getSocket = () => socket;
 
 export const playMessageSound = async () => {
   try {
-    const { Audio } = require('expo-av');
-    const { sound } = await Audio.Sound.createAsync(
+    const { createAudioPlayer } = require('expo-audio');
+    const player = createAudioPlayer(
       require('../../assets/sent-recieve-notification.wav')
     );
-    await sound.playAsync();
+    const sub = player.addListener('playbackStatusUpdate', (status) => {
+      if (status.didJustFinish) {
+        sub.remove();
+        player.remove();
+      }
+    });
+    player.play();
   } catch (error) {
     console.log('Error playing sound', error);
   }
 };
 
 const connectSocket = (userId) => {
-  if (socket?.connected) return socket;
+  const targetUrl = getSocketUrl();
+  activeUserId = userId;
 
-  socket = io(SOCKET_URL, {
+  if (socket?.connected && activeSocketUrl === targetUrl) return socket;
+  if (socket && activeSocketUrl !== targetUrl) {
+    socket.disconnect();
+    socket = null;
+  }
+
+  activeSocketUrl = targetUrl;
+  socket = io(targetUrl, {
     transports: ['websocket', 'polling'],   // WebSocket preferred, polling fallback
     reconnection: true,
     reconnectionAttempts: Infinity,
@@ -225,11 +240,21 @@ const connectSocket = (userId) => {
 };
 
 const disconnectSocket = () => {
+  activeUserId = null;
+  activeSocketUrl = null;
   if (socket) {
     socket.disconnect();
     socket = null;
   }
 };
+
+// Automatically reconnect socket if centralized backend URL changes at runtime
+onConfigChange(({ socketUrl }) => {
+  if (socket && activeUserId && socketUrl && socketUrl !== activeSocketUrl) {
+    console.log('[Socket] Backend URL changed, reconnecting to:', socketUrl);
+    connectSocket(activeUserId);
+  }
+});
 
 const joinChat = (chatId) => socket?.emit('join_chat', chatId);
 const leaveChat = (chatId) => socket?.emit('leave_chat', chatId);

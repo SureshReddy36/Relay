@@ -6,11 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0A0A0F"
-    },
     "backgroundColor": "#0A0A0A",
     "assetBundlePatterns": [
       "**/*"
@@ -51,13 +46,21 @@
     },
     "plugins": [
       [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0A0A0F"
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Allow Relay to access your camera."
         }
       ],
       [
-        "expo-av",
+        "expo-audio",
         {
           "microphonePermission": "Allow Relay to access your microphone."
         }
@@ -93,7 +96,10 @@
       ],
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
-      "expo-font"
+      "expo-font",
+      "expo-asset",
+      "expo-sharing",
+      "expo-status-bar"
     ],
     "extra": {
       "eas": {

@@ -1,24 +1,42 @@
 import axios from 'axios';
-
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://10.0.2.2:5000/api';
+import { getApiUrl, onConfigChange, refreshBackendConfig } from './configService';
 
 const api = axios.create({
-  baseURL: BASE_URL,
+  baseURL: getApiUrl(),
   timeout: 60000,
   headers: { 'Content-Type': 'application/json' },
 });
 
 // Separate instance for file uploads — longer timeout for Cloudinary
 export const uploadApi = axios.create({
-  baseURL: BASE_URL,
+  baseURL: getApiUrl(),
   timeout: 120000,
   transformRequest: (data) => {
     return data; // Bypasses Axios transformation bugs for FormData on mobile
   },
 });
 
+// Keep Axios baseURLs synchronized with dynamic backend configuration
+onConfigChange(({ apiUrl }) => {
+  api.defaults.baseURL = apiUrl;
+  uploadApi.defaults.baseURL = apiUrl;
+});
+
+const attachDynamicBaseUrl = (config) => {
+  config.baseURL = getApiUrl();
+  return config;
+};
+
+api.interceptors.request.use(attachDynamicBaseUrl);
+uploadApi.interceptors.request.use(attachDynamicBaseUrl);
+
 // Shared error handler
 const handleError = (error) => {
+  if (!error.response) {
+    // Network error — check if backend URL was updated (respects cache TTL)
+    refreshBackendConfig(false).catch(() => {});
+  }
+
   const message =
     error.response?.data?.message ||
     error.message ||

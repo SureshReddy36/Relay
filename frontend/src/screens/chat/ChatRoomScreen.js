@@ -13,9 +13,15 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
-import { Audio } from 'expo-av';
+import {
+  useAudioRecorder,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+} from 'expo-audio';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { EmojiKeyboard } from 'rn-emoji-keyboard';
+import Reanimated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 
 import useChatStore from '../../store/useChatStore';
 import useAuthStore from '../../store/useAuthStore';
@@ -46,7 +52,7 @@ function CamDot() {
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1.4, duration: 600, useNativeDriver: false }),
-        Animated.timing(pulse, { toValue: 1,   duration: 600, useNativeDriver: false }),
+        Animated.timing(pulse, { toValue: 1, duration: 600, useNativeDriver: false }),
       ])
     ).start();
     return () => pulse.stopAnimation();
@@ -92,13 +98,13 @@ const formatChatDateSeparator = (dateString) => {
   if (!dateString) return '';
   const date = new Date(dateString);
   const now = new Date();
-  
+
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  
+
   const diffTime = today - targetDate;
   const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-  
+
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
   if (diffDays < 7 && diffDays > 1) {
@@ -121,33 +127,29 @@ export default function ChatRoomScreen({ route, navigation }) {
   const clearUnread = useChatStore(s => s.clearUnread);
   const insets = useSafeAreaInsets();
 
-  const [kbHeight, setKbHeight] = useState(0);
+  const animatedKeyboard = useAnimatedKeyboard();
+  const androidKbStyle = useAnimatedStyle(() => ({
+    paddingBottom: Platform.OS === 'android' ? animatedKeyboard.height.value : 0,
+  }));
 
-  useEffect(() => {
-    if (Platform.OS === 'android') {
-      const showSub = Keyboard.addListener('keyboardDidShow', (e) => setKbHeight(e.endCoordinates.height));
-      const hideSub = Keyboard.addListener('keyboardDidHide', () => setKbHeight(0));
-      return () => { showSub.remove(); hideSub.remove(); };
-    }
-  }, []);
-
-  const [text, setText]               = useState('');
-  const [replyTo, setReplyTo]         = useState(null);
-  const [isSending, setIsSending]     = useState(false);
-  const [showAttach, setShowAttach]   = useState(false);
-  const [page, setPage]               = useState(1);
+  const [text, setText] = useState('');
+  const [replyTo, setReplyTo] = useState(null);
+  const [isSending, setIsSending] = useState(false);
+  const [showAttach, setShowAttach] = useState(false);
+  const [page, setPage] = useState(1);
   const [selectedUser, setSelectedUser] = useState(null);
-  const [showSearch, setShowSearch]   = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showDisappear, setShowDisappear] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
   const [showPollModal, setShowPollModal] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessages, setSelectedMessages] = useState(new Set());
   const [forwardMessage, setForwardMessage] = useState(null);
   const [forwardSelectedChats, setForwardSelectedChats] = useState(new Set());
-  const flatRef      = useRef(null);
+  const flatRef = useRef(null);
   const typingTimeout = useRef(null);
   const lastTypingEmit = useRef(0);
   const isSendingRef = useRef(false);
@@ -233,8 +235,8 @@ export default function ChatRoomScreen({ route, navigation }) {
       showAlert('Error', e.message || 'Failed to forward');
     }
   };
-  const searchRef    = useRef(null);
-  const inputRef     = useRef(null);
+  const searchRef = useRef(null);
+  const inputRef = useRef(null);
   const isRelayBotChat = !chat.isGroupChat && chat.users?.some(u => u.username === 'relay_bot' || u.username === 'relay');
   const isMicaChat = !chat.isGroupChat && chat.users?.some(u => u.username === 'mica');
   const isBotChat = isRelayBotChat || isMicaChat;
@@ -246,7 +248,7 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [mediaCountdownSeconds, setMediaCountdownSeconds] = useState(null);
   const [showMediaTimerModal, setShowMediaTimerModal] = useState(false);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
-  const [recording, setRecording] = useState(null);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
 
@@ -302,12 +304,12 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (chat.disappearAfter > 0) shouldDisable = true;
     if (chat.allowScreenshots === false) shouldDisable = true;
     if (isBotChat) shouldDisable = true;
-    
+
     // Block if full screen media is open and it's self-destructing
     if (fullScreenMedia?.isSelfDestructing) {
       shouldDisable = true;
     }
-    
+
     // Only block screenshot if there are ACTIVE disappearing messages sent by OTHERS
     if (!shouldDisable && chatMessages?.some(m => {
       if (m.deletedForEveryone) return false;
@@ -318,18 +320,18 @@ export default function ChatRoomScreen({ route, navigation }) {
     })) {
       shouldDisable = true;
     }
-    
+
     if (shouldDisable && !isCapturePrevented.current) {
-      ScreenCapture.preventScreenCaptureAsync().catch(() => {});
+      ScreenCapture.preventScreenCaptureAsync().catch(() => { });
       isCapturePrevented.current = true;
     } else if (!shouldDisable && isCapturePrevented.current) {
-      ScreenCapture.allowScreenCaptureAsync().catch(() => {});
+      ScreenCapture.allowScreenCaptureAsync().catch(() => { });
       isCapturePrevented.current = false;
     }
-    
+
     return () => {
       if (isCapturePrevented.current) {
-        ScreenCapture.allowScreenCaptureAsync().catch(() => {});
+        ScreenCapture.allowScreenCaptureAsync().catch(() => { });
         isCapturePrevented.current = false;
       }
     };
@@ -343,8 +345,8 @@ export default function ChatRoomScreen({ route, navigation }) {
       if (fullScreenMedia.messageId) {
         api.post(`/messages/${fullScreenMedia.messageId}/destruct`)
           .then(() => {
-              useChatStore.getState().disappearMessage(chat._id, fullScreenMedia.messageId);
-            })
+            useChatStore.getState().disappearMessage(chat._id, fullScreenMedia.messageId);
+          })
           .catch((err) => console.log('Error self-destructing media:', err));
       }
       return;
@@ -364,7 +366,7 @@ export default function ChatRoomScreen({ route, navigation }) {
       const filename = url.split('/').pop() || 'download';
       const localUri = `${FileSystem.documentDirectory}${filename}`;
       const { uri } = await FileSystem.downloadAsync(url, localUri);
-      
+
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status === 'granted') {
         await MediaLibrary.saveToLibraryAsync(uri);
@@ -393,23 +395,23 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   const chatMessages = messages[chat._id] || [];
   const activeTypingUserIds = (typingUsers[chat._id] || []).filter(id => id !== user?._id);
-  const isTyping     = activeTypingUserIds.length > 0;
+  const isTyping = activeTypingUserIds.length > 0;
   const resolveTypingUsername = (userId) => {
     const foundUser = chat.users?.find(u => u._id === userId || u._id?.toString() === userId?.toString());
     return foundUser ? (foundUser.displayName || foundUser.username) : 'Someone';
   };
 
-  const otherUser     = chat.isGroupChat ? null : chat.users?.find(u => u._id !== user?._id);
-  const headerName    = chat.isGroupChat ? chat.chatName : (otherUser?.displayName || otherUser?.username);
-  const headerAvatar  = chat.isGroupChat ? chat.groupPicture : otherUser?.profilePicture;
-  const isOnline      = !chat.isGroupChat && (otherUser?.isOnline || otherUser?.username === 'mica_bot' || otherUser?.username === 'relay_bot');
+  const otherUser = chat.isGroupChat ? null : chat.users?.find(u => u._id !== user?._id);
+  const headerName = chat.isGroupChat ? chat.chatName : (otherUser?.displayName || otherUser?.username);
+  const headerAvatar = chat.isGroupChat ? chat.groupPicture : otherUser?.profilePicture;
+  const isOnline = !chat.isGroupChat && (otherUser?.isOnline || otherUser?.username === 'mica_bot' || otherUser?.username === 'relay_bot');
   const isCameraActive = !chat.isGroupChat && otherUser?.isCameraActive;
 
   // Filtered messages for search
   const displayMessages = searchQuery.trim()
     ? chatMessages.filter(m =>
-        m.content?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
+      m.content?.toLowerCase().includes(searchQuery.toLowerCase())
+    )
     : chatMessages;
 
   useFocusEffect(
@@ -463,7 +465,7 @@ export default function ChatRoomScreen({ route, navigation }) {
       const newestMsg = chatMessages[0];
       const senderId = newestMsg?.sender?._id || newestMsg?.sender;
       if (senderId && senderId !== user?._id && !newestMsg?.readBy?.includes(user?._id)) {
-        api.put(`/messages/${chat._id}/read`).catch(() => {});
+        api.put(`/messages/${chat._id}/read`).catch(() => { });
         markRead(chat._id, user?._id);
         clearUnread(chat._id);
       }
@@ -484,16 +486,27 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
   }, []);
 
+  const draftTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    };
+  }, []);
+
   const handleTyping = (val) => {
     setText(val);
-    useChatStore.getState().setDraft(chat._id, val);
-    
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      useChatStore.getState().setDraft(chat._id, val);
+    }, 400);
+
     const now = Date.now();
     if (now - lastTypingEmit.current > 1000) {
       sendTyping(chat._id, user?._id, user?.username);
       lastTypingEmit.current = now;
     }
-    
+
     clearTimeout(typingTimeout.current);
     typingTimeout.current = setTimeout(() => stopTyping(chat._id, user?._id), 1500);
   };
@@ -522,7 +535,7 @@ export default function ChatRoomScreen({ route, navigation }) {
     const cleanForBotCheck = content.replace(/[*_~`]/g, '').trim().toLowerCase();
     const botMentionPattern = /^(?:@)?(?:mica|mars)\s+clear$/i;
     const standalonePattern = /^clear$/i;
-    
+
     if (botMentionPattern.test(cleanForBotCheck) || standalonePattern.test(cleanForBotCheck)) {
       const isGroupAdmin = chat.isGroupChat && (
         chat.admins?.some(admin => admin._id === user?._id || admin === user?._id) ||
@@ -567,6 +580,7 @@ export default function ChatRoomScreen({ route, navigation }) {
       } catch (e) {
         showAlert('Error', e.message || 'Failed to edit message');
       } finally {
+        isSendingRef.current = false;
         setIsSending(false);
       }
       return;
@@ -575,6 +589,7 @@ export default function ChatRoomScreen({ route, navigation }) {
     const tempId = `optimistic-${Date.now()}`;
     const optimisticMessage = {
       _id: tempId,
+      _clientKey: tempId,
       content: content || '',
       sender: {
         _id: user._id,
@@ -605,23 +620,20 @@ export default function ChatRoomScreen({ route, navigation }) {
     playMessageSound();
     const savedReplyTo = replyTo;
     setReplyTo(null);
-    // Scroll to bottom so the new message is visible
-    setTimeout(() => flatRef.current?.scrollToOffset({ offset: 0, animated: true }), 50);
+    // Scroll to bottom immediately so the new message appears without a gap
+    requestAnimationFrame(() => flatRef.current?.scrollToOffset({ offset: 0, animated: true }));
 
     try {
-      const formData = new FormData();
-      if (content) formData.append('content', content);
-      formData.append('chatId', chat._id);
-      if (pollData) {
-        formData.append('messageType', 'poll');
-        formData.append('pollData', JSON.stringify(pollData));
-      }
-      if (savedReplyTo) formData.append('replyTo', savedReplyTo._id);
+      let data;
       if (mediaFile) {
-        formData.append('media', { 
-          uri: mediaFile.uri, 
-          name: mediaFile.name || 'media.jpg', 
-          type: mediaFile.type || 'image/jpeg' 
+        const formData = new FormData();
+        if (content) formData.append('content', content);
+        formData.append('chatId', chat._id);
+        if (savedReplyTo) formData.append('replyTo', savedReplyTo._id);
+        formData.append('media', {
+          uri: mediaFile.uri,
+          name: mediaFile.name || 'media.jpg',
+          type: mediaFile.type || 'image/jpeg',
         });
         if (mediaFile.messageType) formData.append('messageType', mediaFile.messageType);
         if (mediaFile.isSelfDestructing) {
@@ -631,10 +643,16 @@ export default function ChatRoomScreen({ route, navigation }) {
         if (mediaFile.isLive) {
           formData.append('isLive', 'true');
         }
+        ({ data } = await uploadApi.post('/messages', formData, { headers: { 'Content-Type': 'multipart/form-data' } }));
+      } else {
+        ({ data } = await api.post('/messages', {
+          chatId: chat._id,
+          ...(content ? { content } : {}),
+          ...(savedReplyTo ? { replyTo: savedReplyTo._id } : {}),
+          ...(pollData ? { messageType: 'poll', pollData: JSON.stringify(pollData) } : {}),
+        }));
       }
-      const { data } = await uploadApi.post('/messages', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       useChatStore.getState().replaceMessage(chat._id, tempId, data.message);
-      setTimeout(() => inputRef.current?.focus(), 50);
     } catch (e) {
       useChatStore.getState().removeOptimisticMessage(chat._id, tempId);
       showAlert('Error', e.message || 'Failed to send');
@@ -706,7 +724,7 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (!result.canceled) {
       const asset = result.assets[0];
       const isVideo = asset.type === 'video' || asset.uri.endsWith('.mp4') || asset.uri.endsWith('.mov') || asset.uri.endsWith('.MOV') || asset.uri.endsWith('.mkv') || asset.uri.endsWith('.3gp');
-      
+
       if (isVideo) {
         // Videos don't ask for timer, they are view once.
         await sendMessage({
@@ -752,19 +770,17 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   const startAudioRecording = async () => {
     try {
-      const permission = await Audio.requestPermissionsAsync();
+      const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         showAlert('Permission Denied', 'Microphone permission is required to record voice messages.');
         return;
       }
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
-      setRecording(recording);
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
       setIsRecording(true);
     } catch (err) {
       console.error('Failed to start recording', err);
@@ -773,21 +789,19 @@ export default function ChatRoomScreen({ route, navigation }) {
   };
 
   const cancelAudioRecording = async () => {
-    if (!recording) return;
+    if (!isRecording && !audioRecorder.isRecording) return;
     try {
-      await recording.stopAndUnloadAsync();
-    } catch (e) {}
-    setRecording(null);
+      await audioRecorder.stop();
+    } catch (e) { }
     setIsRecording(false);
   };
 
   const sendAudioRecording = async () => {
-    if (!recording) return;
+    if (!isRecording && !audioRecorder.isRecording) return;
     try {
       setIsRecording(false);
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
+      await audioRecorder.stop();
+      const uri = audioRecorder.uri;
 
       if (uri) {
         await sendMessage({
@@ -891,14 +905,14 @@ export default function ChatRoomScreen({ route, navigation }) {
       };
 
       useChatStore.getState().addMessage(chat._id, optimisticMessage);
-      
+
       const { data } = await api.post('/messages', {
         chatId: chat._id,
         mediaUrl: gifUrl,
         mediaType: 'image',
         messageType: 'image',
       });
-      
+
       useChatStore.getState().replaceMessage(chat._id, tempId, data.message);
     } catch (e) {
       console.log('Error sending GIF:', e);
@@ -933,13 +947,13 @@ export default function ChatRoomScreen({ route, navigation }) {
   // Smart last-seen relative-time formatter
   const formatLastSeen = (dateStr) => {
     if (!dateStr) return null;
-    const diffMs  = Date.now() - new Date(dateStr).getTime();
+    const diffMs = Date.now() - new Date(dateStr).getTime();
     const diffMin = Math.floor(diffMs / 60000);
-    const diffHr  = Math.floor(diffMs / 3600000);
+    const diffHr = Math.floor(diffMs / 3600000);
     const diffDay = Math.floor(diffMs / 86400000);
-    if (diffMin < 1)   return 'Last seen just now';
-    if (diffMin < 60)  return `Last seen ${diffMin} min${diffMin === 1 ? '' : 's'} ago`;
-    if (diffHr  < 24)  return `Last seen ${diffHr} hr${diffHr === 1 ? '' : 's'} ago`;
+    if (diffMin < 1) return 'Last seen just now';
+    if (diffMin < 60) return `Last seen ${diffMin} min${diffMin === 1 ? '' : 's'} ago`;
+    if (diffHr < 24) return `Last seen ${diffHr} hr${diffHr === 1 ? '' : 's'} ago`;
     if (diffDay < 365) return `Last seen ${diffDay} day${diffDay === 1 ? '' : 's'} ago`;
     return `Last seen ${new Date(dateStr).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' })}`;
   };
@@ -948,30 +962,128 @@ export default function ChatRoomScreen({ route, navigation }) {
   const statusText = isCameraActive
     ? '📷 Using camera'
     : isOnline
-    ? 'Online'
-    : otherUser?.lastSeen
-    ? formatLastSeen(otherUser.lastSeen)
-    : chat.isGroupChat
-    ? `${chat.users?.filter(u => {
-        const un = u?.username?.toLowerCase();
-        return u?.role !== 'system_bot' && !['mica_bot', 'mars_bot', 'mars', 'mica', 'relay_bot', 'relay'].includes(un);
-      }).length || 0} members`
-    : null;
+      ? 'Online'
+      : otherUser?.lastSeen
+        ? formatLastSeen(otherUser.lastSeen)
+        : chat.isGroupChat
+          ? `${chat.users?.filter(u => {
+            const un = u?.username?.toLowerCase();
+            return u?.role !== 'system_bot' && !['mica_bot', 'mars_bot', 'mars', 'mica', 'relay_bot', 'relay'].includes(un);
+          }).length || 0} members`
+          : null;
 
   const statusColor = isCameraActive
     ? Colors.camera
     : isOnline
-    ? Colors.accentGreen
-    : Colors.dark.muted;
+      ? Colors.accentGreen
+      : Colors.dark.muted;
 
   const disappearSeconds = chat.disappearAfter || 0;
   const disappearIcon = disappearSeconds === -1 ? 'eye-outline' :
-                        disappearSeconds === 86400 ? 'time-outline' :
-                        disappearSeconds === 604800 ? 'calendar-outline' : null;
+    disappearSeconds === 86400 ? 'time-outline' :
+      disappearSeconds === 604800 ? 'calendar-outline' : null;
 
   // Group chats use GROUP_THEMES; personal chats use CHAT_THEMES
   const allThemes = chat.isGroupChat ? [...GROUP_THEMES, ...CHAT_THEMES] : CHAT_THEMES;
   const themeObj = allThemes.find(t => t.id === chat.theme) || allThemes[0];
+
+  const handleSenderPress = useCallback((sender) => {
+    if (sender?.username) {
+      navigation.navigate('UserProfile', { username: sender.username });
+    }
+  }, [navigation]);
+
+  const handleReply = useCallback((msg) => {
+    setReplyTo(msg);
+    requestAnimationFrame(() => flatRef.current?.scrollToOffset({ offset: 0, animated: true }));
+  }, []);
+
+  const handleOpenForward = useCallback((msg) => {
+    setForwardMessage(msg);
+  }, []);
+
+  const handleReact = useCallback(async (msgId, emoji) => {
+    try {
+      await api.post(`/messages/${msgId}/react`, { emoji });
+    } catch (e) {
+      console.error('Failed to react:', e);
+    }
+  }, []);
+
+  const handleMediaPress = useCallback((url, type, msg) => {
+    setFullScreenMedia({
+      url,
+      type,
+      messageId: msg?._id,
+      isSelfDestructing: msg?.isSelfDestructing,
+      destructAfterSeconds: msg?.destructAfterSeconds || 5,
+      isMine: (msg?.sender?._id || msg?.sender) === user?._id,
+    });
+  }, [user?._id]);
+
+  const handleDeleteMessage = useCallback(async (id, type) => {
+    try {
+      await api.delete(`/messages/${id}?type=${type}`);
+      if (type === 'me') {
+        useChatStore.getState().purgeMessage(chat._id, id);
+      } else if (type === 'everyone') {
+        useChatStore.getState().removeMessage(chat._id, id);
+      }
+    } catch (e) {
+      showAlert('Error', e.message);
+    }
+  }, [chat._id, showAlert]);
+
+  const handleStartSelection = useCallback(() => {
+    setSelectionMode(true);
+  }, []);
+
+  const handleToggleSelect = useCallback((id) => {
+    toggleSelectMessage(id);
+  }, []);
+
+  const renderMessageItem = useCallback(({ item, index }) => {
+    const nextItem = displayMessages[index + 1];
+    const showDate = !nextItem || new Date(item.createdAt).toDateString() !== new Date(nextItem.createdAt).toDateString();
+    return (
+      <View>
+        {showDate && (
+          <View style={styles.dateSeparatorContainer}>
+            <View style={styles.dateSeparatorBadge}>
+              <Text style={styles.dateSeparatorText}>{formatChatDateSeparator(item.createdAt)}</Text>
+            </View>
+          </View>
+        )}
+        <MessageBubble
+          message={item}
+          currentUser={user}
+          chat={chat}
+          chatUsers={chat.users || []}
+          isGroup={chat.isGroupChat}
+          chatTheme={chat.theme}
+          searchQuery={searchQuery}
+          onSenderPress={handleSenderPress}
+          onReply={handleReply}
+          onForward={handleOpenForward}
+          onEdit={handleEdit}
+          onReplyPress={handleReplyPress}
+          highlightedMessageId={highlightedMessageId}
+          onReact={handleReact}
+          onMediaPress={(url, type) => handleMediaPress(url, type, item)}
+          onDelete={handleDeleteMessage}
+          selectionMode={selectionMode}
+          isSelected={selectedMessages.has(item._id)}
+          onSelectToggle={handleToggleSelect}
+          onLongPress={handleStartSelection}
+        />
+      </View>
+    );
+  }, [
+    displayMessages, user, chat, searchQuery,
+    handleSenderPress, handleReply, handleOpenForward, handleEdit, handleReplyPress,
+    highlightedMessageId, handleReact, handleMediaPress, handleDeleteMessage,
+    selectionMode, selectedMessages, handleToggleSelect, handleStartSelection,
+  ]);
 
   return (
     <View style={[styles.container, { backgroundColor: themeObj.bg || Colors.dark.bg }]}>
@@ -993,28 +1105,28 @@ export default function ChatRoomScreen({ route, navigation }) {
             )}
           </View>
         ) : showSearch ? (
-        <View style={styles.searchBar}>
-          <Ionicons name="search-outline" size={17} color={Colors.dark.muted} />
-          <TextInput
-            ref={searchRef}
-            style={styles.searchInput}
-            placeholder={`Search in ${headerName}...`}
-            placeholderTextColor={Colors.dark.muted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            returnKeyType="search"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={17} color={Colors.dark.muted} />
-            </TouchableOpacity>
-          )}
-          {searchQuery && (
-            <Text style={styles.searchCount}>
-              {displayMessages.length} result{displayMessages.length !== 1 ? 's' : ''}
-            </Text>
-          )}
-        </View>
+          <View style={styles.searchBar}>
+            <Ionicons name="search-outline" size={17} color={Colors.dark.muted} />
+            <TextInput
+              ref={searchRef}
+              style={styles.searchInput}
+              placeholder={`Search in ${headerName}...`}
+              placeholderTextColor={Colors.dark.muted}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              returnKeyType="search"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={17} color={Colors.dark.muted} />
+              </TouchableOpacity>
+            )}
+            {searchQuery && (
+              <Text style={styles.searchCount}>
+                {displayMessages.length} result{displayMessages.length !== 1 ? 's' : ''}
+              </Text>
+            )}
+          </View>
         ) : (
           <>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
@@ -1072,7 +1184,7 @@ export default function ChatRoomScreen({ route, navigation }) {
                   color={showSearch ? Colors.primary : Colors.dark.text}
                 />
               </TouchableOpacity>
-              
+
               {(!chat.isGroupChat && otherUser && otherUser.username !== 'mica_bot' && otherUser.username !== 'relay_bot' && otherUser.username !== 'relay') && (
                 (() => {
                   const isAlreadyFriend = otherUser?.isFriend ?? user?.friends?.some(f => (f._id || f).toString() === otherUser._id.toString());
@@ -1089,10 +1201,10 @@ export default function ChatRoomScreen({ route, navigation }) {
                         }
                       }}
                     >
-                      <Ionicons 
-                        name={isAlreadyFriend ? "checkmark-circle" : "person-add-outline"} 
-                        size={22} 
-                        color={Colors.primary} 
+                      <Ionicons
+                        name={isAlreadyFriend ? "checkmark-circle" : "person-add-outline"}
+                        size={22}
+                        color={Colors.primary}
                       />
                     </TouchableOpacity>
                   );
@@ -1137,331 +1249,277 @@ export default function ChatRoomScreen({ route, navigation }) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        <View style={{ flex: 1, paddingBottom: Platform.OS === 'android' ? kbHeight : 0 }}>
-        <FlatList
-          ref={flatRef}
-          data={displayMessages}
-          inverted
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="none"
-          keyExtractor={(item) => item._id}
-          renderItem={({ item, index }) => {
-            const nextItem = displayMessages[index + 1];
-            const showDate = !nextItem || new Date(item.createdAt).toDateString() !== new Date(nextItem.createdAt).toDateString();
-            return (
-              <View>
-                {showDate && (
-                  <View style={styles.dateSeparatorContainer}>
-                    <View style={styles.dateSeparatorBadge}>
-                      <Text style={styles.dateSeparatorText}>{formatChatDateSeparator(item.createdAt)}</Text>
-                    </View>
-                  </View>
-                )}
-                <MessageBubble
-                  message={item}
-                  currentUser={user}
-              chat={chat}
-              chatUsers={chat.users || []}
-              isGroup={chat.isGroupChat}
-              chatTheme={chat.theme}
-              searchQuery={searchQuery}
-              onSenderPress={(sender) => {
-                if (sender?.username) {
-                  navigation.navigate('UserProfile', { username: sender.username });
+        <Reanimated.View style={[{ flex: 1 }, androidKbStyle]}>
+          <FlatList
+            ref={flatRef}
+            data={displayMessages}
+            inverted
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="none"
+            initialNumToRender={15}
+            maxToRenderPerBatch={10}
+            windowSize={11}
+            keyExtractor={(item) => item._clientKey || item._id}
+            renderItem={renderMessageItem}
+            onEndReached={loadMore}
+            onEndReachedThreshold={0.3}
+            onScrollToIndexFailed={(info) => {
+              flatRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
+              setTimeout(() => {
+                if (flatRef.current) {
+                  flatRef.current.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
                 }
-              }}
-              onReply={(msg) => {
-                setReplyTo(msg);
-                setTimeout(() => flatRef.current?.scrollToOffset({ offset: 0, animated: true }), 80);
-              }}
-              onForward={(msg) => setForwardMessage(msg)}
-              onEdit={handleEdit}
-              onReplyPress={handleReplyPress}
-              highlightedMessageId={highlightedMessageId}
-              onReact={async (msgId, emoji) => {
-                try {
-                  await api.post(`/messages/${msgId}/react`, { emoji });
-                } catch (e) {
-                  console.error('Failed to react:', e);
-                }
-              }}
-              onMediaPress={(url, type) => setFullScreenMedia({ 
-                url, 
-                type, 
-                messageId: item._id, 
-                isSelfDestructing: item.isSelfDestructing, 
-                destructAfterSeconds: item.destructAfterSeconds || 5, 
-                isMine: (item.sender?._id || item.sender) === user?._id 
-              })}
-              onDelete={async (id, type) => {
-                try { 
-                  await api.delete(`/messages/${id}?type=${type}`); 
-                  if (type === 'me') {
-                    useChatStore.getState().purgeMessage(chat._id, id);
-                  } else if (type === 'everyone') {
-                    useChatStore.getState().removeMessage(chat._id, id);
-                  }
-                } catch(e) { showAlert('Error', e.message); }
-              }}
-              selectionMode={selectionMode}
-              isSelected={selectedMessages.has(item._id)}
-              onSelectToggle={() => toggleSelectMessage(item._id)}
-              onLongPress={() => setSelectionMode(true)}
-            />
-              </View>
-            );
-          }}
-          onEndReached={loadMore}
-          onEndReachedThreshold={0.3}
-          onScrollToIndexFailed={(info) => {
-            flatRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
-            setTimeout(() => {
-              if (flatRef.current) {
-                flatRef.current.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
-              }
-            }, 100);
-          }}
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingVertical: 12 }}
-          onScroll={(e) => {
-            const offsetY = e.nativeEvent.contentOffset.y;
-            setShowScrollToBottom(offsetY > 400);
-          }}
-          scrollEventThrottle={100}
-          ListEmptyComponent={
-            searchQuery ? (
-              <View style={styles.searchEmpty}>
-                <Ionicons name="search-outline" size={40} color={Colors.dark.muted} />
-                <Text style={styles.searchEmptyText}>No messages found for "{searchQuery}"</Text>
-              </View>
-            ) : null
-          }
-        />
-
-        {/* Jump to unread floating button */}
-        {showJumpUnread && unreadIndexRef.current >= 0 && (
-          <TouchableOpacity
-            style={styles.jumpUnreadBtn}
-            activeOpacity={0.85}
-            onPress={() => {
-              flatRef.current?.scrollToIndex({
-                index: unreadIndexRef.current,
-                animated: true,
-                viewPosition: 0.3,
-              });
-              setShowJumpUnread(false);
+              }, 100);
             }}
-          >
-            <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.jumpUnreadGrad}>
-              <Ionicons name="arrow-up" size={16} color="#FFF" />
-              <Text style={styles.jumpUnreadText}>Jump to unread</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        )}
-
-        {/* Scroll to bottom floating button */}
-        {showScrollToBottom && !showJumpUnread && (
-          <TouchableOpacity
-            style={styles.scrollToBottomBtn}
-            activeOpacity={0.85}
-            onPress={() => {
-              flatRef.current?.scrollToOffset({ offset: 0, animated: true });
-              setShowScrollToBottom(false);
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingVertical: 12 }}
+            onScroll={(e) => {
+              const offsetY = e.nativeEvent.contentOffset.y;
+              setShowScrollToBottom(offsetY > 400);
             }}
-          >
-            <View style={styles.scrollToBottomCircle}>
-              <Ionicons name="arrow-down" size={20} color="#FFF" />
-            </View>
-          </TouchableOpacity>
-        )}
+            scrollEventThrottle={100}
+            ListEmptyComponent={
+              searchQuery ? (
+                <View style={styles.searchEmpty}>
+                  <Ionicons name="search-outline" size={40} color={Colors.dark.muted} />
+                  <Text style={styles.searchEmptyText}>No messages found for "{searchQuery}"</Text>
+                </View>
+              ) : null
+            }
+          />
 
-        {/* Typing indicator above input */}
-        {activeTypingUserIds.map((userId) => (
-          <TypingBubble key={userId} username={resolveTypingUsername(userId)} />
-        ))}
-
-        {/* Reply preview */}
-        {replyTo && !isRelayBotChat && (
-          <View style={styles.replyPreview}>
-            <View style={styles.replyBar} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.replyName}>{replyTo.sender?.displayName || replyTo.sender?.username}</Text>
-              <Text style={styles.replyContent} numberOfLines={1}>{replyTo.content || '📎 Media'}</Text>
-            </View>
-            <TouchableOpacity onPress={() => {
-              setReplyTo(null);
-            }}>
-              <Ionicons name="close" size={20} color={Colors.dark.muted} />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Edit preview */}
-        {editingMessage && !isRelayBotChat && (
-          <View style={styles.replyPreview}>
-            <View style={[styles.replyBar, { backgroundColor: Colors.accent }]} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.replyName, { color: Colors.accent }]}>Editing Message</Text>
-              <Text style={styles.replyContent} numberOfLines={1}>{editingMessage.content}</Text>
-            </View>
-            <TouchableOpacity onPress={() => { 
-              setEditingMessage(null); 
-              setText(''); 
-            }}>
-              <Ionicons name="close" size={20} color={Colors.dark.muted} />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Attachment menu */}
-        {showAttach && !isRelayBotChat && (
-          <View style={styles.attachMenu}>
-            <TouchableOpacity style={styles.attachOption} onPress={pickImage}>
-              <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.attachIcon}>
-                <Ionicons name="image" size={22} color="#FFF" />
-              </LinearGradient>
-              <Text style={styles.attachLabel}>Gallery</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.attachOption} onPress={takePhoto}>
-              <LinearGradient colors={['#EF4444', '#DC2626']} style={styles.attachIcon}>
-                <Ionicons name="camera" size={22} color="#FFF" />
-              </LinearGradient>
-              <Text style={styles.attachLabel}>Live Cam</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.attachOption} 
-              onPress={() => { setShowAttach(false); setShowVoiceModal(true); startAudioRecording(); }}
-            >
-              <LinearGradient colors={['#9333EA', '#7E22CE']} style={styles.attachIcon}>
-                <Ionicons name="mic" size={22} color="#FFF" />
-              </LinearGradient>
-              <Text style={styles.attachLabel}>Voice</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.attachOption} 
-              onPress={() => { setShowAttach(false); setShowGifModal(true); }}
-            >
-              <LinearGradient colors={['#06B6D4', '#0891B2']} style={styles.attachIcon}>
-                <Ionicons name="film" size={22} color="#FFF" />
-              </LinearGradient>
-              <Text style={styles.attachLabel}>GIFs</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.attachOption} onPress={pickDocument}>
-              <LinearGradient colors={['#22C55E', '#16A34A']} style={styles.attachIcon}>
-                <Ionicons name="document" size={22} color="#FFF" />
-              </LinearGradient>
-              <Text style={styles.attachLabel}>Document</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.attachOption} onPress={pickDisappearingMedia}>
-              <LinearGradient colors={['#EAB308', '#CA8A04']} style={styles.attachIcon}>
-                <Ionicons name="time" size={22} color="#FFF" />
-              </LinearGradient>
-              <Text style={styles.attachLabel}>Disappearing</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.attachOption} onPress={() => { setShowAttach(false); setShowPollModal(true); }}>
-              <LinearGradient colors={['#F97316', '#EA580C']} style={styles.attachIcon}>
-                <Ionicons name="bar-chart" size={22} color="#FFF" />
-              </LinearGradient>
-              <Text style={styles.attachLabel}>Poll</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-
-
-        {/* Input bar — paddingBottom includes gesture nav inset */}
-        {isRelayBotChat ? (
-          <View style={[styles.restrictedBar, { paddingBottom: (insets.bottom || 8) + 12, justifyContent: 'space-between', paddingHorizontal: 20 }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="lock-closed" size={16} color={Colors.dark.muted} style={{ marginRight: 6 }} />
-              <Text style={styles.restrictedText}>Messages restricted.</Text>
-            </View>
-            <TouchableOpacity onPress={() => setShowHelpModal(true)} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.primary + '20', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 }}>
-              <Ionicons name="help-circle-outline" size={18} color={Colors.primary} style={{ marginRight: 4 }} />
-              <Text style={{ color: Colors.primary, fontWeight: 'bold' }}>Help</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <View style={[styles.inputBar, { paddingBottom: (insets.bottom || 8) + 6 }]}>
-          <TouchableOpacity onPress={() => setShowAttach(!showAttach)} style={styles.inputIconBtn}>
-            <Ionicons name={showAttach ? 'close' : 'add-circle-outline'} size={26} color={Colors.primary} />
-          </TouchableOpacity>
-
-          <View style={styles.inputWrap}>
-            <TouchableOpacity 
+          {/* Jump to unread floating button */}
+          {showJumpUnread && unreadIndexRef.current >= 0 && (
+            <TouchableOpacity
+              style={styles.jumpUnreadBtn}
+              activeOpacity={0.85}
               onPress={() => {
-                if (showEmoji) {
-                  setShowEmoji(false);
-                  setTimeout(() => inputRef.current?.focus(), 100);
-                } else {
-                  Keyboard.dismiss();
-                  setShowEmoji(true);
-                }
-              }} 
-              style={styles.emojiToggle}
+                flatRef.current?.scrollToIndex({
+                  index: unreadIndexRef.current,
+                  animated: true,
+                  viewPosition: 0.3,
+                });
+                setShowJumpUnread(false);
+              }}
             >
-              <Ionicons name={showEmoji ? 'keypad-outline' : 'happy-outline'} size={22} color={showEmoji ? Colors.primary : Colors.dark.muted} />
-            </TouchableOpacity>
-             <TextInput
-              ref={inputRef}
-              style={styles.textInput}
-              placeholder="Message..."
-              placeholderTextColor={Colors.dark.muted}
-              value={text}
-              onChangeText={handleTyping}
-              onFocus={() => setShowEmoji(false)}
-              multiline
-              maxLength={4096}
-            />
-          </View>
-
-          {text.trim() ? (
-            <TouchableOpacity onPress={() => sendMessage()} disabled={isSending}>
-              <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.sendBtn}>
-                {isSending
-                  ? <ActivityIndicator size="small" color="#FFF" />
-                  : <Ionicons name="send" size={20} color="#FFF" />}
+              <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.jumpUnreadGrad}>
+                <Ionicons name="arrow-up" size={16} color="#FFF" />
+                <Text style={styles.jumpUnreadText}>Jump to unread</Text>
               </LinearGradient>
             </TouchableOpacity>
-          ) : null}
-        </View>
-        )}
+          )}
 
-        {/* Inline Emoji Keyboard (replaces system keyboard without covering input) */}
-        {!isRelayBotChat && showEmoji && (
-          <View style={{ height: 320, backgroundColor: '#1A1A24' }}>
-            <View style={styles.emojiHeader}>
-              <TouchableOpacity onPress={() => { setShowEmoji(false); setTimeout(() => inputRef.current?.focus(), 100); }} style={{ padding: 5 }}>
-                <Ionicons name="arrow-back" size={24} color={Colors.primary} />
+          {/* Scroll to bottom floating button */}
+          {showScrollToBottom && !showJumpUnread && (
+            <TouchableOpacity
+              style={styles.scrollToBottomBtn}
+              activeOpacity={0.85}
+              onPress={() => {
+                flatRef.current?.scrollToOffset({ offset: 0, animated: true });
+                setShowScrollToBottom(false);
+              }}
+            >
+              <View style={styles.scrollToBottomCircle}>
+                <Ionicons name="arrow-down" size={20} color="#FFF" />
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* Typing indicator above input */}
+          {activeTypingUserIds.map((userId) => (
+            <TypingBubble key={userId} username={resolveTypingUsername(userId)} />
+          ))}
+
+          {/* Reply preview */}
+          {replyTo && !isRelayBotChat && (
+            <View style={styles.replyPreview}>
+              <View style={styles.replyBar} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.replyName}>{replyTo.sender?.displayName || replyTo.sender?.username}</Text>
+                <Text style={styles.replyContent} numberOfLines={1}>{replyTo.content || '📎 Media'}</Text>
+              </View>
+              <TouchableOpacity onPress={() => {
+                setReplyTo(null);
+              }}>
+                <Ionicons name="close" size={20} color={Colors.dark.muted} />
               </TouchableOpacity>
-              <Text style={{ color: '#FFF', fontSize: 16, fontWeight: 'bold', marginLeft: 15 }}>Emojis</Text>
             </View>
-            <EmojiKeyboard 
-              onEmojiSelected={(emoji) => {
-                setText(prev => prev + emoji.emoji);
-              }}
-              allowMultipleSelections={true}
-              theme={{
-                container: '#1A1A24',
-                header: '#FFFFFF',
-                skinTonesContainer: '#2A2A35',
-                category: {
-                  icon: '#666666',
-                  iconActive: '#2DD4BF',
-                  container: '#2A2A35',
-                  containerActive: '#2A2A35',
-                },
-                search: {
-                  background: '#2A2A35',
-                  text: '#FFFFFF',
-                  placeholder: '#666666',
-                  icon: '#666666',
-                }
-              }}
-            />
-          </View>
-        )}
-        </View>
+          )}
+
+          {/* Edit preview */}
+          {editingMessage && !isRelayBotChat && (
+            <View style={styles.replyPreview}>
+              <View style={[styles.replyBar, { backgroundColor: Colors.accent }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.replyName, { color: Colors.accent }]}>Editing Message</Text>
+                <Text style={styles.replyContent} numberOfLines={1}>{editingMessage.content}</Text>
+              </View>
+              <TouchableOpacity onPress={() => {
+                setEditingMessage(null);
+                setText('');
+              }}>
+                <Ionicons name="close" size={20} color={Colors.dark.muted} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Attachment menu */}
+          {showAttach && !isRelayBotChat && (
+            <View style={styles.attachMenu}>
+              <TouchableOpacity style={styles.attachOption} onPress={pickImage}>
+                <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.attachIcon}>
+                  <Ionicons name="image" size={22} color="#FFF" />
+                </LinearGradient>
+                <Text style={styles.attachLabel}>Gallery</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.attachOption} onPress={takePhoto}>
+                <LinearGradient colors={['#EF4444', '#DC2626']} style={styles.attachIcon}>
+                  <Ionicons name="camera" size={22} color="#FFF" />
+                </LinearGradient>
+                <Text style={styles.attachLabel}>Live Cam</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.attachOption}
+                onPress={() => { setShowAttach(false); setShowVoiceModal(true); startAudioRecording(); }}
+              >
+                <LinearGradient colors={['#9333EA', '#7E22CE']} style={styles.attachIcon}>
+                  <Ionicons name="mic" size={22} color="#FFF" />
+                </LinearGradient>
+                <Text style={styles.attachLabel}>Voice</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.attachOption}
+                onPress={() => { setShowAttach(false); setShowGifModal(true); }}
+              >
+                <LinearGradient colors={['#06B6D4', '#0891B2']} style={styles.attachIcon}>
+                  <Ionicons name="film" size={22} color="#FFF" />
+                </LinearGradient>
+                <Text style={styles.attachLabel}>GIFs</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.attachOption} onPress={pickDocument}>
+                <LinearGradient colors={['#22C55E', '#16A34A']} style={styles.attachIcon}>
+                  <Ionicons name="document" size={22} color="#FFF" />
+                </LinearGradient>
+                <Text style={styles.attachLabel}>Document</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.attachOption} onPress={pickDisappearingMedia}>
+                <LinearGradient colors={['#EAB308', '#CA8A04']} style={styles.attachIcon}>
+                  <Ionicons name="time" size={22} color="#FFF" />
+                </LinearGradient>
+                <Text style={styles.attachLabel}>Disappearing</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.attachOption} onPress={() => { setShowAttach(false); setShowPollModal(true); }}>
+                <LinearGradient colors={['#F97316', '#EA580C']} style={styles.attachIcon}>
+                  <Ionicons name="bar-chart" size={22} color="#FFF" />
+                </LinearGradient>
+                <Text style={styles.attachLabel}>Poll</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+
+
+          {/* Input bar — paddingBottom includes gesture nav inset */}
+          {isRelayBotChat ? (
+            <View style={[styles.restrictedBar, { paddingBottom: (insets.bottom || 8) + 12, justifyContent: 'space-between', paddingHorizontal: 20 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Ionicons name="lock-closed" size={16} color={Colors.dark.muted} style={{ marginRight: 6 }} />
+                <Text style={styles.restrictedText}>Messages restricted.</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowHelpModal(true)} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.primary + '20', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16 }}>
+                <Ionicons name="help-circle-outline" size={18} color={Colors.primary} style={{ marginRight: 4 }} />
+                <Text style={{ color: Colors.primary, fontWeight: 'bold' }}>Help</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={[styles.inputBar, { paddingBottom: (insets.bottom || 8) + 6 }]}>
+              <TouchableOpacity onPress={() => setShowAttach(!showAttach)} style={styles.inputIconBtn}>
+                <Ionicons name={showAttach ? 'close' : 'add-circle-outline'} size={26} color={Colors.primary} />
+              </TouchableOpacity>
+
+              <View style={styles.inputWrap}>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (showEmoji) {
+                      setShowEmoji(false);
+                      setTimeout(() => inputRef.current?.focus(), 100);
+                    } else {
+                      Keyboard.dismiss();
+                      setShowEmoji(true);
+                    }
+                  }}
+                  style={styles.emojiToggle}
+                >
+                  <Ionicons name={showEmoji ? 'keypad-outline' : 'happy-outline'} size={22} color={showEmoji ? Colors.primary : Colors.dark.muted} />
+                </TouchableOpacity>
+                <TextInput
+                  ref={inputRef}
+                  style={styles.textInput}
+                  placeholder="Message..."
+                  placeholderTextColor={Colors.dark.muted}
+                  value={text}
+                  onChangeText={handleTyping}
+                  onFocus={() => {
+                    setIsInputFocused(true);
+                    setShowEmoji(false);
+                  }}
+                  onBlur={() => setIsInputFocused(false)}
+                  multiline
+                  maxLength={4096}
+                />
+              </View>
+
+              {(isInputFocused || text.trim().length > 0) ? (
+                <TouchableOpacity
+                  onPress={() => sendMessage()}
+                  disabled={isSending || !text.trim()}
+                  style={!text.trim() ? { opacity: 0.45 } : undefined}
+                >
+                  <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.sendBtn}>
+                    {isSending
+                      ? <ActivityIndicator size="small" color="#FFF" />
+                      : <Ionicons name="send" size={20} color="#FFF" />}
+                  </LinearGradient>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
+
+          {/* Inline Emoji Keyboard (replaces system keyboard without covering input) */}
+          {!isRelayBotChat && showEmoji && (
+            <View style={{ height: 320, backgroundColor: '#1A1A24' }}>
+              <View style={styles.emojiHeader}>
+                <TouchableOpacity onPress={() => { setShowEmoji(false); setTimeout(() => inputRef.current?.focus(), 100); }} style={{ padding: 5 }}>
+                  <Ionicons name="arrow-back" size={24} color={Colors.primary} />
+                </TouchableOpacity>
+                <Text style={{ color: '#FFF', fontSize: 16, fontWeight: 'bold', marginLeft: 15 }}>Emojis</Text>
+              </View>
+              <EmojiKeyboard
+                onEmojiSelected={(emoji) => {
+                  setText(prev => prev + emoji.emoji);
+                }}
+                allowMultipleSelections={true}
+                theme={{
+                  container: '#1A1A24',
+                  header: '#FFFFFF',
+                  skinTonesContainer: '#2A2A35',
+                  category: {
+                    icon: '#666666',
+                    iconActive: '#2DD4BF',
+                    container: '#2A2A35',
+                    containerActive: '#2A2A35',
+                  },
+                  search: {
+                    background: '#2A2A35',
+                    text: '#FFFFFF',
+                    placeholder: '#666666',
+                    icon: '#666666',
+                  }
+                }}
+              />
+            </View>
+          )}
+        </Reanimated.View>
       </KeyboardAvoidingView>
 
       {/* User info bottom sheet */}
@@ -1475,10 +1533,10 @@ export default function ChatRoomScreen({ route, navigation }) {
       />
 
       {/* Help / Support Modal for Relay Bot */}
-      <Modal 
-        visible={showHelpModal} 
-        transparent 
-        animationType="fade" 
+      <Modal
+        visible={showHelpModal}
+        transparent
+        animationType="fade"
         onRequestClose={() => {
           if (helpCategory) {
             Keyboard.dismiss();
@@ -1490,20 +1548,20 @@ export default function ChatRoomScreen({ route, navigation }) {
           }
         }}
       >
-        <KeyboardAvoidingView 
-          style={styles.modalOverlay} 
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.helpModalContent}>
             <View style={styles.gifModalHeader}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {helpCategory ? (
-                  <TouchableOpacity 
-                    onPress={() => { 
-                      Keyboard.dismiss(); 
-                      setHelpCategory(null); 
-                      setHelpText(''); 
-                    }} 
+                  <TouchableOpacity
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setHelpCategory(null);
+                      setHelpText('');
+                    }}
                     style={{ marginRight: 8, padding: 4 }}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
@@ -1512,20 +1570,20 @@ export default function ChatRoomScreen({ route, navigation }) {
                 ) : null}
                 <Text style={styles.gifModalTitle}>Help & Support</Text>
               </View>
-              <TouchableOpacity 
-                onPress={() => { 
-                  Keyboard.dismiss(); 
-                  setShowHelpModal(false); 
-                  setHelpCategory(null); 
-                  setHelpText(''); 
-                }} 
+              <TouchableOpacity
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setShowHelpModal(false);
+                  setHelpCategory(null);
+                  setHelpText('');
+                }}
                 style={styles.gifCloseBtn}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
                 <Ionicons name="close" size={20} color={Colors.dark.text} />
               </TouchableOpacity>
             </View>
-            
+
             {!helpCategory ? (
               <>
                 <Text style={{ color: Colors.dark.muted, marginBottom: 16 }}>Please select a category:</Text>
@@ -1564,8 +1622,8 @@ export default function ChatRoomScreen({ route, navigation }) {
                   autoFocus
                 />
                 <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 }}>
-                  <TouchableOpacity 
-                    style={[styles.forwardSendBtn, { backgroundColor: 'transparent', marginRight: 12, borderWidth: 1, borderColor: Colors.dark.border, paddingHorizontal: 20, paddingVertical: 10, marginTop: 0 }]} 
+                  <TouchableOpacity
+                    style={[styles.forwardSendBtn, { backgroundColor: 'transparent', marginRight: 12, borderWidth: 1, borderColor: Colors.dark.border, paddingHorizontal: 20, paddingVertical: 10, marginTop: 0 }]}
                     onPress={() => {
                       Keyboard.dismiss();
                       setHelpCategory(null);
@@ -1574,9 +1632,9 @@ export default function ChatRoomScreen({ route, navigation }) {
                   >
                     <Text style={{ color: Colors.dark.text, fontWeight: 'bold' }}>Back</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={[styles.forwardSendBtn, { opacity: (!helpText.trim() || isSendingHelp) ? 0.5 : 1, paddingHorizontal: 24, paddingVertical: 10, marginTop: 0 }]} 
-                    onPress={sendHelpMessage} 
+                  <TouchableOpacity
+                    style={[styles.forwardSendBtn, { opacity: (!helpText.trim() || isSendingHelp) ? 0.5 : 1, paddingHorizontal: 24, paddingVertical: 10, marginTop: 0 }]}
+                    onPress={sendHelpMessage}
                     disabled={!helpText.trim() || isSendingHelp}
                   >
                     {isSendingHelp ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={styles.forwardSendBtnText}>Send</Text>}
@@ -1672,29 +1730,29 @@ export default function ChatRoomScreen({ route, navigation }) {
                 <Ionicons name="close" size={20} color={Colors.dark.text} />
               </TouchableOpacity>
             </View>
-            
+
             <Text style={styles.mediaTimerModalDesc}>
               Select a self-destruct timer. The recipient can only view this media once for the selected duration.
             </Text>
 
-            <TouchableOpacity 
-              style={styles.mediaTimerOption} 
+            <TouchableOpacity
+              style={styles.mediaTimerOption}
               onPress={() => { setShowMediaTimerModal(false); selectAndSendDisappearingMedia(5); }}
             >
               <Ionicons name="time-outline" size={20} color={Colors.primary} style={{ marginRight: 10 }} />
               <Text style={styles.mediaTimerOptionText}>5 seconds</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={styles.mediaTimerOption} 
+            <TouchableOpacity
+              style={styles.mediaTimerOption}
               onPress={() => { setShowMediaTimerModal(false); selectAndSendDisappearingMedia(10); }}
             >
               <Ionicons name="time-outline" size={20} color={Colors.primary} style={{ marginRight: 10 }} />
               <Text style={styles.mediaTimerOptionText}>10 seconds</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={styles.mediaTimerOption} 
+            <TouchableOpacity
+              style={styles.mediaTimerOption}
               onPress={() => { setShowMediaTimerModal(false); selectAndSendDisappearingMedia(30); }}
             >
               <Ionicons name="time-outline" size={20} color={Colors.primary} style={{ marginRight: 10 }} />
@@ -1702,8 +1760,8 @@ export default function ChatRoomScreen({ route, navigation }) {
             </TouchableOpacity>
 
             {/* Cancel Button */}
-            <TouchableOpacity 
-              style={styles.mediaTimerCancelBtn} 
+            <TouchableOpacity
+              style={styles.mediaTimerCancelBtn}
               onPress={() => setShowMediaTimerModal(false)}
             >
               <Text style={styles.mediaTimerCancelBtnText}>Cancel</Text>
@@ -1722,7 +1780,7 @@ export default function ChatRoomScreen({ route, navigation }) {
         <View style={styles.modalOverlay}>
           <View style={styles.voiceModalContent}>
             <Text style={styles.voiceModalTitle}>Voice Message</Text>
-            
+
             {/* Visualizer and Timer */}
             <View style={styles.recorderContainer}>
               {isRecording ? (
@@ -1838,8 +1896,8 @@ export default function ChatRoomScreen({ route, navigation }) {
             </View>
             <ScrollView style={{ maxHeight: 400 }}>
               {chats.map(c => {
-                const isMe = !c.isGroupChat && c.users?.every(u => (u._id||u) === user._id);
-                const other = !c.isGroupChat && c.users?.find(u => (u._id||u) !== user._id);
+                const isMe = !c.isGroupChat && c.users?.every(u => (u._id || u) === user._id);
+                const other = !c.isGroupChat && c.users?.find(u => (u._id || u) !== user._id);
                 const name = c.isGroupChat ? c.chatName : (other?.displayName || other?.username || (isMe ? 'Saved Messages' : 'Unknown'));
                 const isSelected = forwardSelectedChats.has(c._id);
                 return (
@@ -1972,10 +2030,10 @@ const styles = StyleSheet.create({
 
   // ── Input bar ─────────────────────────────────────────────────────────────
   emojiHeader: {
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    paddingHorizontal: 16, 
-    paddingTop: 10, 
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 10,
     paddingBottom: 5,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.05)',
